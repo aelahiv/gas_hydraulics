@@ -1,0 +1,14 @@
+[general]
+name=GasHydraulics
+qgisMinimumVersion=3.0
+version=0.2.0
+author=Your Name
+email=you@example.com
+description=Comprehensive QGIS plugin suite for gas hydraulics analysis with three specialized tools: Demand File Analysis (current year load breakdown), Historical Analysis (load trends over time), and Load Forecast (5/10/15/20 year projections). Integrates spatial data with Excel service point lists for detailed load calculations by area and class.
+tags=gas, hydraulics, forecasting, load analysis, spatial analysis
+homepage=
+tracker=
+repository=
+icon=
+experimental=False
+deprecated=False
