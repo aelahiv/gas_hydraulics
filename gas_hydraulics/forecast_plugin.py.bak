@@ -47,13 +47,13 @@ class ForecastPlugin:
     def _log_startup_status(self):
         """Log the plugin startup status."""
         if self.enhanced_features_available:
-            LOGGER.info(" Gas Hydraulics Forecasting Plugin - FULL FUNCTIONALITY")
-            LOGGER.info("    Enhanced forecasting features available")
-            LOGGER.info("    Population-based residential forecasting")
-            LOGGER.info("    Regression-based commercial/industrial forecasting")
-            LOGGER.info("    Spatial load analysis capabilities")
+            LOGGER.info("🚀 Gas Hydraulics Forecasting Plugin - FULL FUNCTIONALITY")
+            LOGGER.info("   ✓ Enhanced forecasting features available")
+            LOGGER.info("   ✓ Population-based residential forecasting")
+            LOGGER.info("   ✓ Regression-based commercial/industrial forecasting")
+            LOGGER.info("   ✓ Spatial load analysis capabilities")
         else:
-            LOGGER.warning("️  Gas Hydraulics Forecasting Plugin - BASIC MODE")
+            LOGGER.warning("⚠️  Gas Hydraulics Forecasting Plugin - BASIC MODE")
             LOGGER.warning("   • Enhanced features not available")
             LOGGER.warning("   • Install pandas, numpy, scikit-learn for full functionality")
             LOGGER.warning("   • Run setup_dev.py to install missing dependencies")
@@ -724,12 +724,12 @@ class ForecastPlugin:
         Returns:
             Dictionary mapping years to list of projected loads by area
         """
-        LOGGER.info(" DEBUG: === project_units called ===")
-        LOGGER.info(f" DEBUG: area_dicts = {area_dicts}")
-        LOGGER.info(f" DEBUG: growth_dict = {growth_dict}")
-        LOGGER.info(f" DEBUG: growth_dict types = {[(k, type(v)) for k, v in growth_dict.items()]}")
-        LOGGER.info(f" DEBUG: start_year = {start_year}, end_year = {end_year}")
-        LOGGER.info(f" DEBUG: areas = {areas}")
+        LOGGER.info("🔍 DEBUG: === project_units called ===")
+        LOGGER.info(f"🔍 DEBUG: area_dicts = {area_dicts}")
+        LOGGER.info(f"🔍 DEBUG: growth_dict = {growth_dict}")
+        LOGGER.info(f"🔍 DEBUG: growth_dict types = {[(k, type(v)) for k, v in growth_dict.items()]}")
+        LOGGER.info(f"🔍 DEBUG: start_year = {start_year}, end_year = {end_year}")
+        LOGGER.info(f"🔍 DEBUG: areas = {areas}")
         res_dict = {start_year: [area_dicts[area][start_year] for area in areas]}
         
         ultimate_units = {area: area_dicts[area].get('ultimate', area_dicts[area][start_year]) for area in areas}
@@ -885,8 +885,8 @@ class ForecastPlugin:
     def run_enhanced_forecasting(self, inputs):
         """Run enhanced forecasting with spatial data and population/housing analysis."""
         try:
-            LOGGER.info(" Starting enhanced forecasting with spatial analysis")
-            print(" Starting enhanced forecasting with spatial analysis")
+            LOGGER.info("🚀 Starting enhanced forecasting with spatial analysis")
+            print("🚀 Starting enhanced forecasting with spatial analysis")
             
             # Load population and housing data
             population_data = self.load_csv_data(
@@ -913,8 +913,8 @@ class ForecastPlugin:
             aggregate_polygons = inputs.get('aggregate_polygons', False)
             
             if aggregate_polygons:
-                LOGGER.info(" Using aggregated polygon regression analysis")
-                print(" Using aggregated polygon regression analysis")
+                LOGGER.info("🔄 Using aggregated polygon regression analysis")
+                print("🔄 Using aggregated polygon regression analysis")
                 forecast_results = self.perform_aggregated_regression_forecasting(
                     population_data,
                     housing_data,
@@ -925,8 +925,8 @@ class ForecastPlugin:
                     inputs.get('priority_zones', [])
                 )
             else:
-                LOGGER.info(" Using individual polygon regression analysis")
-                print(" Using individual polygon regression analysis")
+                LOGGER.info("🔄 Using individual polygon regression analysis")
+                print("🔄 Using individual polygon regression analysis")
                 forecast_results = self.perform_regression_forecasting(
                     population_data,
                     housing_data,
@@ -937,8 +937,8 @@ class ForecastPlugin:
                     inputs.get('priority_zones', [])
                 )
             
-            LOGGER.info(" Enhanced forecasting completed successfully")
-            print(" Enhanced forecasting completed successfully")
+            LOGGER.info("✅ Enhanced forecasting completed successfully")
+            print("✅ Enhanced forecasting completed successfully")
             
             return forecast_results
             
@@ -952,8 +952,8 @@ class ForecastPlugin:
     def run_basic_forecasting(self, inputs):
         """Run basic forecasting with simple inputs."""
         try:
-            LOGGER.info(" Running basic forecasting")
-            print(" Running basic forecasting")
+            LOGGER.info("⚡ Running basic forecasting")
+            print("⚡ Running basic forecasting")
             
             # Extract start and end years from forecast_years list
             forecast_years = inputs['forecast_years']
@@ -971,8 +971,8 @@ class ForecastPlugin:
                 priority_zones=inputs.get('priority_zones', [])
             )
             
-            LOGGER.info(" Basic forecasting completed successfully")
-            print(" Basic forecasting completed successfully")
+            LOGGER.info("✅ Basic forecasting completed successfully")
+            print("✅ Basic forecasting completed successfully")
             
             return forecast_results
             
@@ -1177,7 +1177,7 @@ class ForecastPlugin:
             from sklearn.linear_model import LinearRegression
             import numpy as np
             
-            LOGGER.info(" Starting aggregated regression analysis")
+            LOGGER.info("🔄 Starting aggregated regression analysis")
             
             # Combine all area data into aggregated time series
             combined_population = {}
@@ -1265,7 +1265,7 @@ class ForecastPlugin:
                         LOGGER.info(f"{load_class} {year}: Total projected load = {total_growth_by_class[load_class][year]:.2f}")
             
             # Now distribute the total projected loads across areas using the projection function
-            LOGGER.info(" Distributing aggregated forecasts across polygons")
+            LOGGER.info("🔄 Distributing aggregated forecasts across polygons")
             
             results = {
                 'residential': {},
@@ -1333,7 +1333,7 @@ class ForecastPlugin:
                         for i, area in enumerate(area_dicts.keys()):
                             results[load_class][year][area] = projection_results[year][i]
             
-            LOGGER.info(" Aggregated regression forecasting completed")
+            LOGGER.info("✅ Aggregated regression forecasting completed")
             return results
             
         except Exception as e:
@@ -1406,7 +1406,7 @@ class ForecastPlugin:
         
         if area_dicts_res:
             # Extract residential growth values for project_units
-            LOGGER.info(" DEBUG: Processing residential loads...")
+            LOGGER.info("🔍 DEBUG: Processing residential loads...")
             res_growth = {}
             for year, growth_data in growth_projection.items():
                 if isinstance(growth_data, dict):
@@ -1414,22 +1414,22 @@ class ForecastPlugin:
                 else:
                     res_growth[year] = growth_data
             
-            LOGGER.info(f" DEBUG: area_dicts_res = {area_dicts_res}")
-            LOGGER.info(f" DEBUG: res_growth sample = {dict(list(res_growth.items())[:3])}")
-            LOGGER.info(f" DEBUG: res_growth types = {[(k, type(v)) for k, v in list(res_growth.items())[:3]]}")
+            LOGGER.info(f"🔍 DEBUG: area_dicts_res = {area_dicts_res}")
+            LOGGER.info(f"🔍 DEBUG: res_growth sample = {dict(list(res_growth.items())[:3])}")
+            LOGGER.info(f"🔍 DEBUG: res_growth types = {[(k, type(v)) for k, v in list(res_growth.items())[:3]]}")
             
-            LOGGER.info(" DEBUG: Calling project_units for residential...")
+            LOGGER.info("🔍 DEBUG: Calling project_units for residential...")
             try:
                 res_projection = self.project_units(
                     area_dicts_res, res_growth, start_year, max_forecast_year, 
                     list(area_dicts_res.keys()), priority_zones=priority_zones or []
                 )
-                LOGGER.info(" DEBUG: Residential project_units completed successfully")
+                LOGGER.info("🔍 DEBUG: Residential project_units completed successfully")
             except Exception as e:
-                LOGGER.error(f" DEBUG: Error in residential project_units: {e}")
-                LOGGER.error(f" DEBUG: Error type: {type(e).__name__}")
+                LOGGER.error(f"🔍 DEBUG: Error in residential project_units: {e}")
+                LOGGER.error(f"🔍 DEBUG: Error type: {type(e).__name__}")
                 import traceback
-                LOGGER.error(f" DEBUG: Full traceback: {traceback.format_exc()}")
+                LOGGER.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
                 raise
             # Extract forecast years
             for year in forecast_years:
@@ -1440,7 +1440,7 @@ class ForecastPlugin:
         
         if area_dicts_comm:
             # Extract commercial growth values for project_units  
-            LOGGER.info(" DEBUG: Processing commercial loads...")
+            LOGGER.info("🔍 DEBUG: Processing commercial loads...")
             comm_growth = {}
             for year, growth_data in growth_projection.items():
                 if isinstance(growth_data, dict):
@@ -1448,21 +1448,21 @@ class ForecastPlugin:
                 else:
                     comm_growth[year] = growth_data
             
-            LOGGER.info(f" DEBUG: area_dicts_comm = {area_dicts_comm}")
-            LOGGER.info(f" DEBUG: comm_growth sample = {dict(list(comm_growth.items())[:3])}")
+            LOGGER.info(f"🔍 DEBUG: area_dicts_comm = {area_dicts_comm}")
+            LOGGER.info(f"🔍 DEBUG: comm_growth sample = {dict(list(comm_growth.items())[:3])}")
             
-            LOGGER.info(" DEBUG: Calling project_units for commercial...")
+            LOGGER.info("🔍 DEBUG: Calling project_units for commercial...")
             try:
                 comm_projection = self.project_units(
                     area_dicts_comm, comm_growth, start_year, max_forecast_year,
                     list(area_dicts_comm.keys()), priority_zones=priority_zones or []
                 )
-                LOGGER.info(" DEBUG: Commercial project_units completed successfully")
+                LOGGER.info("🔍 DEBUG: Commercial project_units completed successfully")
             except Exception as e:
-                LOGGER.error(f" DEBUG: Error in commercial project_units: {e}")
-                LOGGER.error(f" DEBUG: Error type: {type(e).__name__}")
+                LOGGER.error(f"🔍 DEBUG: Error in commercial project_units: {e}")
+                LOGGER.error(f"🔍 DEBUG: Error type: {type(e).__name__}")
                 import traceback
-                LOGGER.error(f" DEBUG: Full traceback: {traceback.format_exc()}")
+                LOGGER.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
                 raise
             # Extract forecast years
             for year in forecast_years:
@@ -1473,7 +1473,7 @@ class ForecastPlugin:
                     
         if area_dicts_ind:
             # Extract industrial growth values for project_units  
-            LOGGER.info(" DEBUG: Processing industrial loads...")
+            LOGGER.info("🔍 DEBUG: Processing industrial loads...")
             ind_growth = {}
             for year, growth_data in growth_projection.items():
                 if isinstance(growth_data, dict):
@@ -1481,21 +1481,21 @@ class ForecastPlugin:
                 else:
                     ind_growth[year] = growth_data
             
-            LOGGER.info(f" DEBUG: area_dicts_ind = {area_dicts_ind}")
-            LOGGER.info(f" DEBUG: ind_growth sample = {dict(list(ind_growth.items())[:3])}")
+            LOGGER.info(f"🔍 DEBUG: area_dicts_ind = {area_dicts_ind}")
+            LOGGER.info(f"🔍 DEBUG: ind_growth sample = {dict(list(ind_growth.items())[:3])}")
             
-            LOGGER.info(" DEBUG: Calling project_units for industrial...")
+            LOGGER.info("🔍 DEBUG: Calling project_units for industrial...")
             try:
                 ind_projection = self.project_units(
                     area_dicts_ind, ind_growth, start_year, max_forecast_year,
                     list(area_dicts_ind.keys()), priority_zones=priority_zones or []
                 )
-                LOGGER.info(" DEBUG: Industrial project_units completed successfully")
+                LOGGER.info("🔍 DEBUG: Industrial project_units completed successfully")
             except Exception as e:
-                LOGGER.error(f" DEBUG: Error in industrial project_units: {e}")
-                LOGGER.error(f" DEBUG: Error type: {type(e).__name__}")
+                LOGGER.error(f"🔍 DEBUG: Error in industrial project_units: {e}")
+                LOGGER.error(f"🔍 DEBUG: Error type: {type(e).__name__}")
                 import traceback
-                LOGGER.error(f" DEBUG: Full traceback: {traceback.format_exc()}")
+                LOGGER.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
                 raise
             # Extract forecast years
             for year in forecast_years:
@@ -1539,8 +1539,8 @@ class ForecastPlugin:
                 # Check if load assignment was selected (mode ID = 2)
                 if selected_mode == 2:
                     # Run load assignment tool
-                    LOGGER.info(" Running Load Assignment Tool")
-                    print(" Running Load Assignment Tool")
+                    LOGGER.info("📍 Running Load Assignment Tool")
+                    print("📍 Running Load Assignment Tool")
                     self.run_load_assignment()
                     return
                 
@@ -1552,27 +1552,27 @@ class ForecastPlugin:
             
             # Show current functionality status
             if use_full_mode:
-                LOGGER.info(" Running Load Forecast - FULL MODE")
-                print(" Running Load Forecast - FULL MODE")
+                LOGGER.info("🚀 Running Load Forecast - FULL MODE")
+                print("🚀 Running Load Forecast - FULL MODE")
             else:
-                LOGGER.info(" Running Load Forecast - BASIC MODE")
-                print(" Running Load Forecast - BASIC MODE")
+                LOGGER.info("⚡ Running Load Forecast - BASIC MODE")
+                print("⚡ Running Load Forecast - BASIC MODE")
             
-            LOGGER.info(" DEBUG: Starting forecast plugin execution")
-            print(" DEBUG: Starting forecast plugin execution")
+            LOGGER.info("🔍 DEBUG: Starting forecast plugin execution")
+            print("🔍 DEBUG: Starting forecast plugin execution")
             
             if self.iface:
                 if use_full_mode:
                     # Enhanced mode - use spatial analysis with layers
-                    LOGGER.info(" Starting FULL MODE with spatial analysis")
-                    print(" Starting FULL MODE with spatial analysis")
+                    LOGGER.info("🚀 Starting FULL MODE with spatial analysis")
+                    print("🚀 Starting FULL MODE with spatial analysis")
                     success, inputs = self.show_enhanced_input_dialog()
                     if not success:
                         return
                     
                     # Validate layers if present
                     validator = DataValidator()
-                    LOGGER.info(" Validating enhanced forecast inputs...")
+                    LOGGER.info("🔍 Validating enhanced forecast inputs...")
                     
                     # Validate input parameters
                     inputs_validator = validate_forecast_inputs(inputs)
@@ -1617,28 +1617,28 @@ class ForecastPlugin:
                     if not show_validation_dialog(validator,
                                                   title="Enhanced Forecast - Data Validation",
                                                   parent=self.iface.mainWindow()):
-                        LOGGER.info(" User cancelled after validation")
+                        LOGGER.info("❌ User cancelled after validation")
                         return
                     
                     # Process with enhanced spatial forecasting
                     forecast_results = self.run_enhanced_forecasting(inputs)
                 else:
                     # Basic mode - use simple input dialog
-                    LOGGER.info(" Starting BASIC MODE with simple inputs")
-                    print(" Starting BASIC MODE with simple inputs")
+                    LOGGER.info("⚡ Starting BASIC MODE with simple inputs")
+                    print("⚡ Starting BASIC MODE with simple inputs")
                     success, inputs = self.show_input_dialog()
                     if not success:
                         return
                     
                     # Validate inputs before processing
-                    LOGGER.info(" Validating basic forecast inputs...")
+                    LOGGER.info("🔍 Validating basic forecast inputs...")
                     validator = validate_forecast_inputs(inputs)
                     
                     # Show validation dialog
                     if not show_validation_dialog(validator, 
                                                   title="Basic Forecast - Data Validation",
                                                   parent=self.iface.mainWindow()):
-                        LOGGER.info(" User cancelled after validation")
+                        LOGGER.info("❌ User cancelled after validation")
                         return
                     
                     # Process with basic forecasting
@@ -1661,9 +1661,9 @@ class ForecastPlugin:
                 if use_full_mode:
                     QMessageBox.information(
                         self.iface.mainWindow(),
-                        " Gas Hydraulics - Full Functionality",
+                        "🚀 Gas Hydraulics - Full Functionality",
                         "Plugin running with FULL FUNCTIONALITY!\n\n"
-                        " All dependencies available (pandas, numpy, scikit-learn)\n\n"
+                        "✓ All dependencies available (pandas, numpy, scikit-learn)\n\n"
                         "Enhanced capabilities include:\n"
                         "• Spatial load analysis by polygon\n"
                         "• Population-based residential forecasting\n"
@@ -1675,9 +1675,9 @@ class ForecastPlugin:
                     # Show installation guidance
                     reply = QMessageBox.question(
                         self.iface.mainWindow(),
-                        "️ Gas Hydraulics - Basic Mode",
+                        "⚠️ Gas Hydraulics - Basic Mode",
                         "Plugin running in BASIC MODE (limited functionality)\n\n"
-                        " Enhanced forecasting features require additional packages:\n"
+                        "✗ Enhanced forecasting features require additional packages:\n"
                         "• pandas (for data processing)\n"
                         "• numpy (for numerical calculations)\n"
                         "• scikit-learn (for regression analysis)\n\n"
@@ -1701,28 +1701,28 @@ class ForecastPlugin:
                         )
                 
                 # Create forecasts with user inputs using original method
-                LOGGER.info(" DEBUG: BASIC MODE - Input data prepared")
-                print(" DEBUG: BASIC MODE - Input data prepared")
-                LOGGER.info(f" DEBUG: BASIC MODE - current_loads = {inputs['current_loads']}")
-                print(f" DEBUG: BASIC MODE - current_loads = {inputs['current_loads']}")
-                LOGGER.info(f" DEBUG: BASIC MODE - ultimate_loads = {inputs['ultimate_loads']}")
-                print(f" DEBUG: BASIC MODE - ultimate_loads = {inputs['ultimate_loads']}")
-                LOGGER.info(f" DEBUG: BASIC MODE - growth_projection sample = {dict(list(inputs['growth_projection'].items())[:5])}")
-                print(f" DEBUG: BASIC MODE - growth_projection sample = {dict(list(inputs['growth_projection'].items())[:5])}")
-                LOGGER.info(f" DEBUG: BASIC MODE - growth_projection types = {[(k, type(v)) for k, v in list(inputs['growth_projection'].items())[:5]]}")
+                LOGGER.info("🔍 DEBUG: BASIC MODE - Input data prepared")
+                print("🔍 DEBUG: BASIC MODE - Input data prepared")
+                LOGGER.info(f"🔍 DEBUG: BASIC MODE - current_loads = {inputs['current_loads']}")
+                print(f"🔍 DEBUG: BASIC MODE - current_loads = {inputs['current_loads']}")
+                LOGGER.info(f"🔍 DEBUG: BASIC MODE - ultimate_loads = {inputs['ultimate_loads']}")
+                print(f"🔍 DEBUG: BASIC MODE - ultimate_loads = {inputs['ultimate_loads']}")
+                LOGGER.info(f"🔍 DEBUG: BASIC MODE - growth_projection sample = {dict(list(inputs['growth_projection'].items())[:5])}")
+                print(f"🔍 DEBUG: BASIC MODE - growth_projection sample = {dict(list(inputs['growth_projection'].items())[:5])}")
+                LOGGER.info(f"🔍 DEBUG: BASIC MODE - growth_projection types = {[(k, type(v)) for k, v in list(inputs['growth_projection'].items())[:5]]}")
                 
-                LOGGER.info(" DEBUG: BASIC MODE - Calling create_forecast_scenarios...")
-                print(" DEBUG: BASIC MODE - Calling create_forecast_scenarios...")
+                LOGGER.info("🔍 DEBUG: BASIC MODE - Calling create_forecast_scenarios...")
+                print("🔍 DEBUG: BASIC MODE - Calling create_forecast_scenarios...")
                 
                 # Extract start and end years from forecast_years list
                 forecast_years = inputs['forecast_years']
                 start_year = min(forecast_years) if forecast_years else None
                 end_year = max(forecast_years) if forecast_years else None
                 
-                LOGGER.info(f" DEBUG: BASIC MODE - forecast_years = {forecast_years}")
-                LOGGER.info(f" DEBUG: BASIC MODE - extracted start_year = {start_year}, end_year = {end_year}")
-                print(f" DEBUG: BASIC MODE - forecast_years = {forecast_years}")
-                print(f" DEBUG: BASIC MODE - extracted start_year = {start_year}, end_year = {end_year}")
+                LOGGER.info(f"🔍 DEBUG: BASIC MODE - forecast_years = {forecast_years}")
+                LOGGER.info(f"🔍 DEBUG: BASIC MODE - extracted start_year = {start_year}, end_year = {end_year}")
+                print(f"🔍 DEBUG: BASIC MODE - forecast_years = {forecast_years}")
+                print(f"🔍 DEBUG: BASIC MODE - extracted start_year = {start_year}, end_year = {end_year}")
                 
                 try:
                     forecast_results = self.create_forecast_scenarios(
@@ -1733,16 +1733,16 @@ class ForecastPlugin:
                         end_year,
                         priority_zones=[]
                     )
-                    LOGGER.info(" DEBUG: BASIC MODE - create_forecast_scenarios completed successfully")
-                    print(" DEBUG: BASIC MODE - create_forecast_scenarios completed successfully")
+                    LOGGER.info("🔍 DEBUG: BASIC MODE - create_forecast_scenarios completed successfully")
+                    print("🔍 DEBUG: BASIC MODE - create_forecast_scenarios completed successfully")
                 except Exception as e:
-                    LOGGER.error(f" DEBUG: BASIC MODE - Error in create_forecast_scenarios: {e}")
-                    print(f" DEBUG: BASIC MODE - Error in create_forecast_scenarios: {e}")
-                    LOGGER.error(f" DEBUG: BASIC MODE - Error type: {type(e).__name__}")
-                    print(f" DEBUG: BASIC MODE - Error type: {type(e).__name__}")
+                    LOGGER.error(f"🔍 DEBUG: BASIC MODE - Error in create_forecast_scenarios: {e}")
+                    print(f"🔍 DEBUG: BASIC MODE - Error in create_forecast_scenarios: {e}")
+                    LOGGER.error(f"🔍 DEBUG: BASIC MODE - Error type: {type(e).__name__}")
+                    print(f"🔍 DEBUG: BASIC MODE - Error type: {type(e).__name__}")
                     import traceback
-                    LOGGER.error(f" DEBUG: BASIC MODE - Full traceback: {traceback.format_exc()}")
-                    print(f" DEBUG: BASIC MODE - Full traceback: {traceback.format_exc()}")
+                    LOGGER.error(f"🔍 DEBUG: BASIC MODE - Full traceback: {traceback.format_exc()}")
+                    print(f"🔍 DEBUG: BASIC MODE - Full traceback: {traceback.format_exc()}")
                     raise
                 
                 if forecast_results:
@@ -1775,40 +1775,40 @@ class ForecastPlugin:
                 # Sample growth projection (annual growth)
                 growth_projection = {year: 100.0 + year * 2.0 for year in range(2025, 2046)}
                 
-                LOGGER.info(" DEBUG: Input data prepared")
-                LOGGER.info(f" DEBUG: current_loads = {current_loads}")
-                LOGGER.info(f" DEBUG: ultimate_loads = {ultimate_loads}")
-                LOGGER.info(f" DEBUG: growth_projection sample = {dict(list(growth_projection.items())[:5])}")
-                LOGGER.info(f" DEBUG: growth_projection types = {[(k, type(v)) for k, v in list(growth_projection.items())[:5]]}")
+                LOGGER.info("🔍 DEBUG: Input data prepared")
+                LOGGER.info(f"🔍 DEBUG: current_loads = {current_loads}")
+                LOGGER.info(f"🔍 DEBUG: ultimate_loads = {ultimate_loads}")
+                LOGGER.info(f"🔍 DEBUG: growth_projection sample = {dict(list(growth_projection.items())[:5])}")
+                LOGGER.info(f"🔍 DEBUG: growth_projection types = {[(k, type(v)) for k, v in list(growth_projection.items())[:5]]}")
                 
                 # Create forecasts
-                LOGGER.info(" DEBUG: Calling create_forecast_scenarios...")
+                LOGGER.info("🔍 DEBUG: Calling create_forecast_scenarios...")
                 try:
                     forecast_results = self.create_forecast_scenarios(
                         current_loads, ultimate_loads, growth_projection,
                         priority_zones=[]
                     )
-                    LOGGER.info(" DEBUG: create_forecast_scenarios completed successfully")
+                    LOGGER.info("🔍 DEBUG: create_forecast_scenarios completed successfully")
                 except Exception as e:
-                    LOGGER.error(f" DEBUG: Error in create_forecast_scenarios: {e}")
-                    LOGGER.error(f" DEBUG: Error type: {type(e).__name__}")
+                    LOGGER.error(f"🔍 DEBUG: Error in create_forecast_scenarios: {e}")
+                    LOGGER.error(f"🔍 DEBUG: Error type: {type(e).__name__}")
                     import traceback
-                    LOGGER.error(f" DEBUG: Full traceback: {traceback.format_exc()}")
+                    LOGGER.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
                     raise
                 
                 # Create output
                 self.create_forecast_output(forecast_results)
                 
         except Exception as e:
-            LOGGER.error(f" DEBUG: MAIN EXCEPTION CAUGHT - Error running Load Forecast: {e}")
-            LOGGER.error(f" DEBUG: Error type: {type(e).__name__}")
+            LOGGER.error(f"🔍 DEBUG: MAIN EXCEPTION CAUGHT - Error running Load Forecast: {e}")
+            LOGGER.error(f"🔍 DEBUG: Error type: {type(e).__name__}")
             import traceback
-            LOGGER.error(f" DEBUG: Full traceback: {traceback.format_exc()}")
+            LOGGER.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
             
             # Print to console as well in case QGIS logging isn't visible
-            print(f" DEBUG: MAIN EXCEPTION - Error running Load Forecast: {e}")
-            print(f" DEBUG: Error type: {type(e).__name__}")
-            print(f" DEBUG: Full traceback: {traceback.format_exc()}")
+            print(f"🔍 DEBUG: MAIN EXCEPTION - Error running Load Forecast: {e}")
+            print(f"🔍 DEBUG: Error type: {type(e).__name__}")
+            print(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
             
             if self.iface:
                 from qgis.PyQt.QtWidgets import QMessageBox
@@ -1927,7 +1927,7 @@ class ForecastPlugin:
             layout = QVBoxLayout()
             
             # Title
-            title_label = QLabel(" Enhanced Spatial Forecasting Setup")
+            title_label = QLabel("🚀 Enhanced Spatial Forecasting Setup")
             title_font = QFont()
             title_font.setPointSize(14)
             title_font.setBold(True)
@@ -1951,7 +1951,7 @@ class ForecastPlugin:
             layer_main_layout = QVBoxLayout()
             
             # Layer tab title
-            layer_title = QLabel("️ QGIS Layer Selection")
+            layer_title = QLabel("🗺️ QGIS Layer Selection")
             layer_title_font = QFont()
             layer_title_font.setBold(True)
             layer_title_font.setPointSize(11)
@@ -1961,9 +1961,9 @@ class ForecastPlugin:
             # Layer tab description
             layer_desc = QLabel(
                 "Select the QGIS layers for spatial analysis:\n\n"
-                " Service Area Polygons: Define geographic zones for load aggregation\n"
-                " Pipe Network Layer: Gas distribution infrastructure for spatial intersection\n\n"
-                " Tip: Ensure layers are loaded in QGIS and have valid geometries."
+                "📍 Service Area Polygons: Define geographic zones for load aggregation\n"
+                "🔧 Pipe Network Layer: Gas distribution infrastructure for spatial intersection\n\n"
+                "💡 Tip: Ensure layers are loaded in QGIS and have valid geometries."
             )
             layer_desc.setWordWrap(True)
             layer_desc.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -1990,7 +1990,7 @@ class ForecastPlugin:
                 "Select the polygon layer containing service areas/zones\n"
                 "This layer defines the geographic boundaries for load aggregation"
             )
-            layer_layout.addRow(" Service Area Polygons:", self.polygon_layer_combo)
+            layer_layout.addRow("📍 Service Area Polygons:", self.polygon_layer_combo)
             
             # Pipe layer selection  
             self.pipe_layer_combo = QComboBox()
@@ -1999,19 +1999,19 @@ class ForecastPlugin:
                 "Select the pipe network layer (LineString geometry)\n"
                 "Used for spatial intersection analysis with service areas"
             )
-            layer_layout.addRow(" Pipe Network Layer:", self.pipe_layer_combo)
+            layer_layout.addRow("🔧 Pipe Network Layer:", self.pipe_layer_combo)
             
             layer_main_layout.addLayout(layer_layout)
             layer_main_layout.addStretch()
             layer_tab.setLayout(layer_main_layout)
-            tab_widget.addTab(layer_tab, "️ Layers")
+            tab_widget.addTab(layer_tab, "🗺️ Layers")
             
             # Tab 2: Population & Housing Data
             data_tab = QWidget()
             data_main_layout = QVBoxLayout()
             
             # Data tab title
-            data_title = QLabel(" Demographic Data Sources")
+            data_title = QLabel("📊 Demographic Data Sources")
             data_title_font = QFont()
             data_title_font.setBold(True)
             data_title_font.setPointSize(11)
@@ -2021,13 +2021,13 @@ class ForecastPlugin:
             # Data tab description
             data_desc = QLabel(
                 "Provide CSV files with historical population and housing data for enhanced forecasting:\n\n"
-                " Population Data: Historical population counts by area and year\n"
-                "️ Housing Units Data: Historical housing unit counts by area and year\n\n"
-                " Required CSV Format:\n"
+                "📈 Population Data: Historical population counts by area and year\n"
+                "🏘️ Housing Units Data: Historical housing unit counts by area and year\n\n"
+                "💡 Required CSV Format:\n"
                 "   • Area column: Matches zone names in your polygon layer\n"
                 "   • Year column: Numeric year values (e.g., 2020, 2021)\n"
                 "   • Value column: Population count or housing unit count\n\n"
-                "️ The system will use this data to calculate growth rates and project future loads."
+                "⚙️ The system will use this data to calculate growth rates and project future loads."
             )
             data_desc.setWordWrap(True)
             data_desc.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -2040,91 +2040,91 @@ class ForecastPlugin:
             data_main_layout.addWidget(line2)
             
             # Population data group
-            pop_group = QGroupBox(" Population Data Configuration")
+            pop_group = QGroupBox("📈 Population Data Configuration")
             pop_layout = QFormLayout()
             
             self.pop_file_edit = QLineEdit()
             self.pop_file_edit.setPlaceholderText("Select CSV file with population data...")
-            pop_browse_btn = QPushButton(" Browse...")
+            pop_browse_btn = QPushButton("📁 Browse...")
             pop_browse_btn.clicked.connect(lambda: self.browse_file(self.pop_file_edit, "Population Data CSV"))
             pop_browse_btn.setToolTip("Browse for population data CSV file")
             pop_file_layout = QHBoxLayout()
             pop_file_layout.addWidget(self.pop_file_edit)
             pop_file_layout.addWidget(pop_browse_btn)
-            pop_layout.addRow(" Population CSV File:", pop_file_layout)
+            pop_layout.addRow("📄 Population CSV File:", pop_file_layout)
             
             self.pop_area_field = QLineEdit("Area")
             self.pop_area_field.setToolTip(
                 "Column name containing area/zone names\n"
                 "Must match the zone names in your polygon layer"
             )
-            pop_layout.addRow("️ Area Field Name:", self.pop_area_field)
+            pop_layout.addRow("🏷️ Area Field Name:", self.pop_area_field)
             
             self.pop_year_field = QLineEdit("Year")
             self.pop_year_field.setToolTip(
                 "Column name containing year values\n"
                 "Should be numeric (e.g., 2020, 2021, 2022)"
             )
-            pop_layout.addRow(" Year Field Name:", self.pop_year_field)
+            pop_layout.addRow("📅 Year Field Name:", self.pop_year_field)
             
             self.pop_value_field = QLineEdit("Population")
             self.pop_value_field.setToolTip(
                 "Column name containing population counts\n"
                 "Should be numeric values representing total population"
             )
-            pop_layout.addRow(" Population Field Name:", self.pop_value_field)
+            pop_layout.addRow("👥 Population Field Name:", self.pop_value_field)
             
             pop_group.setLayout(pop_layout)
             data_main_layout.addWidget(pop_group)
             
             # Housing data group
-            housing_group = QGroupBox("️ Housing Units Data Configuration")
+            housing_group = QGroupBox("🏘️ Housing Units Data Configuration")
             housing_layout = QFormLayout()
             
             self.housing_file_edit = QLineEdit()
             self.housing_file_edit.setPlaceholderText("Select CSV file with housing data...")
-            housing_browse_btn = QPushButton(" Browse...")
+            housing_browse_btn = QPushButton("📁 Browse...")
             housing_browse_btn.clicked.connect(lambda: self.browse_file(self.housing_file_edit, "Housing Data CSV"))
             housing_browse_btn.setToolTip("Browse for housing units data CSV file")
             housing_file_layout = QHBoxLayout()
             housing_file_layout.addWidget(self.housing_file_edit)
             housing_file_layout.addWidget(housing_browse_btn)
-            housing_layout.addRow(" Housing CSV File:", housing_file_layout)
+            housing_layout.addRow("📄 Housing CSV File:", housing_file_layout)
             
             self.housing_area_field = QLineEdit("Area")
             self.housing_area_field.setToolTip(
                 "Column name containing area/zone names\n"
                 "Must match the zone names in your polygon layer"
             )
-            housing_layout.addRow("️ Area Field Name:", self.housing_area_field)
+            housing_layout.addRow("🏷️ Area Field Name:", self.housing_area_field)
             
             self.housing_year_field = QLineEdit("Year")
             self.housing_year_field.setToolTip(
                 "Column name containing year values\n"
                 "Should be numeric (e.g., 2020, 2021, 2022)"
             )
-            housing_layout.addRow(" Year Field Name:", self.housing_year_field)
+            housing_layout.addRow("📅 Year Field Name:", self.housing_year_field)
             
             self.housing_value_field = QLineEdit("Housing_Units")
             self.housing_value_field.setToolTip(
                 "Column name containing housing unit counts\n"
                 "Should be numeric values representing total housing units"
             )
-            housing_layout.addRow(" Housing Units Field:", self.housing_value_field)
+            housing_layout.addRow("🏠 Housing Units Field:", self.housing_value_field)
             
             housing_group.setLayout(housing_layout)
             data_main_layout.addWidget(housing_group)
             
             data_main_layout.addStretch()
             data_tab.setLayout(data_main_layout)
-            tab_widget.addTab(data_tab, " Data Sources")
+            tab_widget.addTab(data_tab, "📊 Data Sources")
             
             # Tab 3: Priority Zones
             priority_tab = QWidget()
             priority_main_layout = QVBoxLayout()
             
             # Priority tab title
-            priority_title = QLabel(" Enhanced Priority Zones Configuration")
+            priority_title = QLabel("🎯 Enhanced Priority Zones Configuration")
             priority_title_font = QFont()
             priority_title_font.setBold(True)
             priority_title_font.setPointSize(11)
@@ -2134,12 +2134,12 @@ class ForecastPlugin:
             # Priority zones explanation
             priority_desc = QLabel(
                 "Configure zone-specific growth multipliers for enhanced spatial forecasting:\n\n"
-                " Use Cases:\n"
+                "🎯 Use Cases:\n"
                 "   • New Development Areas: Prioritize zones with planned infrastructure\n"
                 "   • Urban Infill: Focus growth on high-density redevelopment areas\n"
                 "   • Master Plan Implementation: Align with city planning documents\n"
                 "   • Restricted Zones: Deprioritize areas with limited development potential\n\n"
-                " Priority Levels & Effects:\n"
+                "📈 Priority Levels & Effects:\n"
                 "   • 2.5× Priority: Major growth centers, new subdivisions (250% of base growth)\n"
                 "   • 2.0× Priority: High-priority development zones (200% of base growth)\n"
                 "   • 1.0× Normal: Standard growth areas (100% - default for all zones)\n"
@@ -2163,7 +2163,7 @@ class ForecastPlugin:
             self.priority_zones_table = QTableWidget()
             self.priority_zones_table.setColumnCount(4)
             self.priority_zones_table.setHorizontalHeaderLabels([
-                "️ Zone Name", " Priority Level", " Start Year", " End Year"
+                "🏷️ Zone Name", "🎯 Priority Level", "📅 Start Year", "📅 End Year"
             ])
             self.priority_zones_table.setToolTip(
                 "Configure zone-specific growth multipliers\n"
@@ -2185,12 +2185,12 @@ class ForecastPlugin:
             # Buttons for managing priority zones
             priority_buttons_layout = QHBoxLayout()
             
-            add_priority_btn = QPushButton(" Add Priority Zone")
+            add_priority_btn = QPushButton("➕ Add Priority Zone")
             add_priority_btn.clicked.connect(self.add_priority_zone_row)
             add_priority_btn.setToolTip("Add a new priority zone configuration")
             priority_buttons_layout.addWidget(add_priority_btn)
             
-            remove_priority_btn = QPushButton(" Remove Selected")
+            remove_priority_btn = QPushButton("➖ Remove Selected")
             remove_priority_btn.clicked.connect(self.remove_priority_zone_row)
             remove_priority_btn.setToolTip("Remove the selected priority zone")
             priority_buttons_layout.addWidget(remove_priority_btn)
@@ -2203,14 +2203,14 @@ class ForecastPlugin:
             
             priority_main_layout.addStretch()
             priority_tab.setLayout(priority_main_layout)
-            tab_widget.addTab(priority_tab, " Priority Zones")
+            tab_widget.addTab(priority_tab, "🎯 Priority Zones")
             
             # Tab 4: Forecast Parameters
             params_tab = QWidget()
             params_main_layout = QVBoxLayout()
             
             # Params tab title
-            params_title = QLabel("️ Enhanced Forecast Parameters")
+            params_title = QLabel("⚙️ Enhanced Forecast Parameters")
             params_title_font = QFont()
             params_title_font.setBold(True)
             params_title_font.setPointSize(11)
@@ -2220,10 +2220,10 @@ class ForecastPlugin:
             # Params tab description
             params_desc = QLabel(
                 "Configure forecast period and base growth rates for enhanced spatial analysis:\n\n"
-                " Forecast Period: Start and end years for the projection\n"
-                " Base Growth Rates: Default annual growth percentages for each customer class\n"
-                " These rates are modified by priority zones and demographic data\n\n"
-                " Tip: Base rates are applied to zones without specific priority settings"
+                "📅 Forecast Period: Start and end years for the projection\n"
+                "📈 Base Growth Rates: Default annual growth percentages for each customer class\n"
+                "🎯 These rates are modified by priority zones and demographic data\n\n"
+                "💡 Tip: Base rates are applied to zones without specific priority settings"
             )
             params_desc.setWordWrap(True)
             params_desc.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -2244,7 +2244,7 @@ class ForecastPlugin:
                 "Year when the forecast begins\n"
                 "This should typically be the current year or the year of your baseline data"
             )
-            params_layout.addRow(" Forecast Start Year:", self.forecast_start_year)
+            params_layout.addRow("📅 Forecast Start Year:", self.forecast_start_year)
             
             self.forecast_end_year = QSpinBox()
             self.forecast_end_year.setRange(2025, 2070)
@@ -2253,7 +2253,7 @@ class ForecastPlugin:
                 "Final year of the forecast projection\n"
                 "Common planning horizons: 20 years (master plan), 50 years (long-term)"
             )
-            params_layout.addRow(" Forecast End Year:", self.forecast_end_year)
+            params_layout.addRow("📅 Forecast End Year:", self.forecast_end_year)
             
             self.growth_rate_residential = QSpinBox()
             self.growth_rate_residential.setRange(-10, 20)
@@ -2264,7 +2264,7 @@ class ForecastPlugin:
                 "Typical range: 1-3% for established areas, 3-5% for growing areas\n"
                 "Modified by priority zones and demographic trends"
             )
-            params_layout.addRow(" Base Residential Growth Rate:", self.growth_rate_residential)
+            params_layout.addRow("🏠 Base Residential Growth Rate:", self.growth_rate_residential)
             
             self.growth_rate_commercial = QSpinBox()
             self.growth_rate_commercial.setRange(-10, 20)
@@ -2275,7 +2275,7 @@ class ForecastPlugin:
                 "Typical range: 2-4% for established areas, 4-6% for growing areas\n"
                 "Modified by priority zones and demographic trends"
             )
-            params_layout.addRow(" Base Commercial Growth Rate:", self.growth_rate_commercial)
+            params_layout.addRow("🏢 Base Commercial Growth Rate:", self.growth_rate_commercial)
             
             # Add aggregation toggle for areas with insufficient data
             from qgis.PyQt.QtWidgets import QCheckBox
@@ -2285,15 +2285,15 @@ class ForecastPlugin:
                 "When checked, combines all polygon data for regression analysis if individual areas have insufficient data.\n"
                 "Useful when some areas have zero or minimal development. The combined regression results are then\n"
                 "distributed across individual polygons using the projection function.\n\n"
-                " Use when: Many zones have sparse or zero data\n"
-                " Avoid when: Each zone has sufficient historical data for individual regression"
+                "✅ Use when: Many zones have sparse or zero data\n"
+                "❌ Avoid when: Each zone has sufficient historical data for individual regression"
             )
-            params_layout.addRow(" Aggregate Polygons for Regression:", self.aggregate_polygons_checkbox)
+            params_layout.addRow("🔄 Aggregate Polygons for Regression:", self.aggregate_polygons_checkbox)
             
             params_main_layout.addLayout(params_layout)
             params_main_layout.addStretch()
             params_tab.setLayout(params_main_layout)
-            tab_widget.addTab(params_tab, "️ Parameters")
+            tab_widget.addTab(params_tab, "⚙️ Parameters")
             
             layout.addWidget(tab_widget)
             
@@ -2575,7 +2575,7 @@ class ForecastPlugin:
             layout = QVBoxLayout()
             
             # Title
-            title_label = QLabel(" Forecast Period Configuration")
+            title_label = QLabel("📅 Forecast Period Configuration")
             title_font = QFont()
             title_font.setPointSize(12)
             title_font.setBold(True)
@@ -2586,7 +2586,7 @@ class ForecastPlugin:
             desc_label = QLabel(
                 "Select the forecast years for your analysis. These years will be used to project "
                 "load growth from current loads to ultimate loads.\n\n"
-                " Tip: Select at least 2 years for meaningful forecasting. Typically, "
+                "💡 Tip: Select at least 2 years for meaningful forecasting. Typically, "
                 "5-year intervals are used."
             )
             desc_label.setWordWrap(True)
@@ -2644,17 +2644,17 @@ class ForecastPlugin:
             
             # Title and description based on load type
             if load_type == "current":
-                title_label = QLabel(" Current Loads (Baseline)")
+                title_label = QLabel("📊 Current Loads (Baseline)")
                 desc_text = (
                     "Enter current load values for each area and category (in appropriate units, e.g., m³/h or CFH).\n\n"
-                    " These values represent the existing baseline loads that will be used as the starting point "
+                    "💡 These values represent the existing baseline loads that will be used as the starting point "
                     "for forecasting. Click 'Add Row' to add more areas, 'Remove Row' to delete selected areas."
                 )
             else:
-                title_label = QLabel(" Ultimate Loads (Build-Out)")
+                title_label = QLabel("🎯 Ultimate Loads (Build-Out)")
                 desc_text = (
                     "Enter ultimate (build-out) load values for each area and category.\n\n"
-                    " These values represent the expected loads when the area is fully developed. "
+                    "💡 These values represent the expected loads when the area is fully developed. "
                     "The forecast will project growth from current loads toward these ultimate values. "
                     "Ultimate loads should be ≥ current loads for each area."
                 )
@@ -2756,7 +2756,7 @@ class ForecastPlugin:
             layout = QVBoxLayout()
             
             # Title
-            title_label = QLabel(" Growth Projection Parameters")
+            title_label = QLabel("📈 Growth Projection Parameters")
             title_font = QFont()
             title_font.setPointSize(12)
             title_font.setBold(True)
@@ -2767,8 +2767,8 @@ class ForecastPlugin:
             desc_label = QLabel(
                 "Configure how loads will grow over time. You can set either a simple growth rate "
                 "or customize growth rates for each zone and category.\n\n"
-                " Linear Growth: Growth increases steadily each year (base + increment × year)\n"
-                " Exponential Growth: Use the table below to set percentage rates per zone"
+                "💡 Linear Growth: Growth increases steadily each year (base + increment × year)\n"
+                "💡 Exponential Growth: Use the table below to set percentage rates per zone"
             )
             desc_label.setWordWrap(True)
             desc_label.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -2781,7 +2781,7 @@ class ForecastPlugin:
             layout.addWidget(line)
             
             # Instructions
-            instructions = QLabel(" Simple Linear Growth Model:")
+            instructions = QLabel("📊 Simple Linear Growth Model:")
             instructions_font = QFont()
             instructions_font.setBold(True)
             instructions.setFont(instructions_font)
@@ -2904,7 +2904,7 @@ class ForecastPlugin:
             layout = QVBoxLayout()
             
             # Title
-            title_label = QLabel(" Priority Zones Configuration")
+            title_label = QLabel("🎯 Priority Zones Configuration")
             title_font = QFont()
             title_font.setPointSize(12)
             title_font.setBold(True)
@@ -2915,7 +2915,7 @@ class ForecastPlugin:
             explanation = QLabel(
                 "Configure priority zones to control load allocation during forecasting. "
                 "Priority zones receive enhanced load allocation, while depriority zones receive reduced allocation.\n\n"
-                " Use Cases:\n"
+                "💡 Use Cases:\n"
                 "• High Priority: Rapidly developing areas needing accelerated infrastructure\n"
                 "• Priority: Growing areas with higher demand expectations\n"
                 "• Normal: Standard growth areas (default)\n"
@@ -2927,7 +2927,7 @@ class ForecastPlugin:
                 "• Normal (1.0×): Standard allocation (baseline)\n"
                 "• Low Priority (0.5×): Zone gets half normal allocation\n"
                 "• Depriority (0.25×): Zone gets quarter normal allocation\n\n"
-                " Set start/end years to apply priority only during specific periods."
+                "📅 Set start/end years to apply priority only during specific periods."
             )
             explanation.setWordWrap(True)
             explanation.setStyleSheet("color: #666; background-color: #f0f0f0; padding: 10px; border-radius: 5px;")
@@ -2959,11 +2959,11 @@ class ForecastPlugin:
             
             # Buttons
             button_layout = QHBoxLayout()
-            add_button = QPushButton(" Add Zone")
+            add_button = QPushButton("➕ Add Zone")
             add_button.setToolTip("Add a new priority zone row")
-            remove_button = QPushButton(" Remove Selected")
+            remove_button = QPushButton("➖ Remove Selected")
             remove_button.setToolTip("Remove the selected priority zone")
-            populate_button = QPushButton(" Load Default Zones")
+            populate_button = QPushButton("📋 Load Default Zones")
             populate_button.setToolTip("Populate with common zone names from current loads")
             
             add_button.clicked.connect(self.add_basic_priority_zone_row)
@@ -3391,7 +3391,7 @@ class ForecastPlugin:
                 f"Exported {len(all_areas)} subzones with data for {len(all_years)} years."
             )
             
-            LOGGER.info(f" Forecast results exported successfully to {file_path}")
+            LOGGER.info(f"✅ Forecast results exported successfully to {file_path}")
             
         except Exception as e:
             LOGGER.error(f"Error exporting forecast to CSV: {e}")

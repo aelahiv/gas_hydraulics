@@ -694,7 +694,7 @@ class DemandFileAnalysisPlugin:
                 
                 # Validate inputs
                 if VALIDATION_AVAILABLE:
-                    LOGGER.info(" Validating demand file analysis inputs...")
+                    LOGGER.info("🔍 Validating demand file analysis inputs...")
                     validator = DataValidator()
                     
                     # Check Excel file
@@ -742,7 +742,7 @@ class DemandFileAnalysisPlugin:
                     if not show_validation_dialog(validator,
                                                   title="Demand File Analysis - Data Validation",
                                                   parent=self.iface.mainWindow()):
-                        LOGGER.info(" User cancelled after validation")
+                        LOGGER.info("❌ User cancelled after validation")
                         return
                 
                 # Process the data with user inputs
@@ -803,7 +803,7 @@ class DemandFileAnalysisPlugin:
             layout = QVBoxLayout()
             
             # Title
-            title_label = QLabel(" Current Year Demand Analysis")
+            title_label = QLabel("📊 Current Year Demand Analysis")
             title_font = QFont()
             title_font.setPointSize(13)
             title_font.setBold(True)
@@ -813,10 +813,10 @@ class DemandFileAnalysisPlugin:
             # Description
             desc_label = QLabel(
                 "Analyze current service point data to establish baseline loads:\n\n"
-                " Processes service point data for a single reference year\n"
-                "️ Aggregates current loads by geographic zones and customer categories\n"
-                " Establishes baseline for forecasting and capacity planning\n\n"
-                " This analysis provides the starting point for all future projections"
+                "📌 Processes service point data for a single reference year\n"
+                "🗺️ Aggregates current loads by geographic zones and customer categories\n"
+                "📊 Establishes baseline for forecasting and capacity planning\n\n"
+                "💡 This analysis provides the starting point for all future projections"
             )
             desc_label.setWordWrap(True)
             desc_label.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -829,20 +829,20 @@ class DemandFileAnalysisPlugin:
             layout.addWidget(line)
             
             # File selection group
-            file_group = QGroupBox(" Input Data Source")
+            file_group = QGroupBox("📄 Input Data Source")
             file_layout = QFormLayout()
             
             # Excel file selection
             excel_layout = QHBoxLayout()
             self.excel_line = QLineEdit()
             self.excel_line.setPlaceholderText("Select Excel file with current year service point data...")
-            excel_browse = QPushButton(" Browse...")
+            excel_browse = QPushButton("📁 Browse...")
             excel_browse.clicked.connect(self.browse_excel_file)
             excel_browse.setToolTip("Browse for Excel file containing current service point records")
             excel_layout.addWidget(self.excel_line)
             excel_layout.addWidget(excel_browse)
             
-            excel_label = QLabel(" Service Point List (Excel):")
+            excel_label = QLabel("📋 Service Point List (Excel):")
             excel_label.setToolTip(
                 "Excel file containing current service point records\n"
                 "Required columns: Location, Category, Load values\n"
@@ -854,7 +854,7 @@ class DemandFileAnalysisPlugin:
             layout.addWidget(file_group)
             
             # Layer selection group
-            layer_group = QGroupBox("️ Spatial Layers")
+            layer_group = QGroupBox("🗺️ Spatial Layers")
             layer_layout = QFormLayout()
             
             # Zone layer selection
@@ -864,7 +864,7 @@ class DemandFileAnalysisPlugin:
                 "Polygon layer defining analysis zones\n"
                 "Service points will be aggregated within these zones"
             )
-            layer_layout.addRow(" Zone Layer (Polygons):", self.zone_combo)
+            layer_layout.addRow("📍 Zone Layer (Polygons):", self.zone_combo)
             
             # Pipe layer selection
             self.pipe_combo = QComboBox()
@@ -873,13 +873,13 @@ class DemandFileAnalysisPlugin:
                 "Pipe network layer for spatial analysis\n"
                 "Used for infrastructure context and reporting"
             )
-            layer_layout.addRow(" Pipe Layer (Lines):", self.pipe_combo)
+            layer_layout.addRow("🔧 Pipe Layer (Lines):", self.pipe_combo)
             
             layer_group.setLayout(layer_layout)
             layout.addWidget(layer_group)
             
             # Parameters group
-            param_group = QGroupBox("️ Calculation Parameters")
+            param_group = QGroupBox("⚙️ Calculation Parameters")
             param_layout = QFormLayout()
             
             # Load multiplier
@@ -891,7 +891,7 @@ class DemandFileAnalysisPlugin:
                 "Multiplier applied to all load values\n"
                 "Use for unit conversion or scaling (e.g., 1.0 = no change)"
             )
-            param_layout.addRow(" Load Multiplier:", self.load_multiplier_spin)
+            param_layout.addRow("🔢 Load Multiplier:", self.load_multiplier_spin)
             
             # Heat factor multiplier
             self.heat_multiplier_spin = QDoubleSpinBox()
@@ -902,7 +902,7 @@ class DemandFileAnalysisPlugin:
                 "Multiplier for heat factor calculations\n"
                 "Adjusts peak demand estimation based on local conditions"
             )
-            param_layout.addRow("️ Heat Factor Multiplier:", self.heat_multiplier_spin)
+            param_layout.addRow("🌡️ Heat Factor Multiplier:", self.heat_multiplier_spin)
             
             # Current year
             self.year_spin = QSpinBox()
@@ -912,7 +912,7 @@ class DemandFileAnalysisPlugin:
                 "Reference year for this analysis\n"
                 "Should match the year of your service point data"
             )
-            param_layout.addRow(" Current Year:", self.year_spin)
+            param_layout.addRow("📅 Current Year:", self.year_spin)
             
             param_group.setLayout(param_layout)
             layout.addWidget(param_group)

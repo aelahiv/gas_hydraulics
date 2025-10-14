@@ -18,6 +18,10 @@ This plugin suite provides three specialized tools for gas utility planning and 
 - Excel data integration with service point analysis
 - Flexible factor code handling for different rate classes
 - Growth projection modeling with priority area support
+- **CSV Import/Export**: All tables support CSV import and export functionality
+  - Results tables: Export analysis results to CSV files
+  - Editable tables: Import data from CSV files with flexible header matching
+  - Growth projections: Import/export forecast parameters and growth models
 
 ## Requirements
 
@@ -64,138 +68,121 @@ This plugin suite provides three specialized tools for gas utility planning and 
    - QGIS polygon layer for analysis zones
    - QGIS line layer for pipe network
 
-2. Run the analysis:
-   - Open the Demand File Analysis dialog
-   - Select your Excel file and QGIS layers
-   - Configure calculation parameters
-   - Execute the analysis
+# Gas Hydraulics Analysis Suite
 
-3. Review results:
-   - Audit dialog shows detailed processing steps
-   - Results dialog displays load breakdowns by zone and class
-   - New layer created with calculated load attributes
+A QGIS plugin suite for gas utility load analysis, historical trends, and demand forecasting.
 
-### Historical Analysis
+This repository contains a set of tools to support demand-file analysis, historical trend analysis,
+forecasting, and a new utility to convert pipe-loaded models into node-loaded formats for downstream
+consumption (for example, Synergi demand import scripts).
 
-1. Use the same data structure as Demand File Analysis
-2. Specify the analysis period (start and end years)
-3. Review historical load trends by 5-year periods
-4. Analyze growth patterns across different zones
+## Notable recent changes
 
-### Forecast Plugin
+- UI and validation: dialogs across the plugins (Forecast, Historical Analysis, Demand File Analysis,
+  and Load Assignment) have been enhanced with clearer titles, descriptions, separators, and
+  input validation to make the workflows easier to use and to provide immediate feedback on
+  invalid inputs.
+- Pipe→Node converter: a new utility was added at
+  `gas_hydraulics/gas_hydraulics/pipe_to_node_converter.py`. It generates the following outputs
+  (by default) when run in its GUI or invoked programmatically:
+  - `node_ex.csv` — node exchange file
+  - `cat_setup.csv` — category setup mapping file
+  - `synergi_demand_script.dsf` — Synergi-style demand import script
+  - `connections.csv` — node-to-pipe connection mapping
+  Documentation for the converter is available at `docs/PIPE_TO_NODE_CONVERTER_GUIDE.md`.
+- Emoji removal: repository text and code were cleaned to remove emoji characters for consistency.
+  The removal was done by a scripted pass that created backups for safety. 80 files were modified
+  and each modified file has a `.bak` backup next to it (for example `README.md.bak`). Keep these
+  backups if you want to review or revert the automated edits.
 
-1. Input current loads by area and class
-2. Define ultimate load targets
-3. Configure growth projections and priority areas
-4. Generate forecasts for multiple time horizons
+## Overview
 
-## Data Requirements
+Main components:
 
-### Excel Service Point List Format
+1. Demand File Analysis — analyze cumulative loads from service point spreadsheets.
+2. Historical Analysis — compute historical trends and 5-year period summaries.
+3. Forecast Plugin — project future loads (5, 10, 15, 20 year horizons) with priority-area support.
+4. PipeToNodeConverter — convert pipe-loaded models into node-based outputs and helper scripts.
 
-Required columns:
-- Factor Code: Rate class identifier
-- Base Factor: Base load factor
-- Heat Factor: Heating load factor
-- HUC 3-Year Peak Demand: Historical peak demand
-- Install Date: Service installation date
-- Use Class: Customer class (RES, COM, IND, etc.)
-- Distribution Pipe: Pipe identifier matching GIS layer
+## Requirements
 
-### QGIS Layer Requirements
+### Software
+- QGIS 3.16 or higher (plugins are designed to run inside QGIS)
+- Python 3.8 or higher (for running standalone scripts, tests, and tools)
 
-**Zone Layer (Polygons):**
-- Analysis areas/subzones
-- Name field for zone identification
+### Python packages
+- pandas >= 1.3.0
+- numpy >= 1.20.0
+- openpyxl >= 3.0.0
+- pytest >= 7.0.0 (for running test suite)
 
-**Pipe Layer (Lines):**
-- Gas distribution network
-- FacNam1005 field containing facility names that match Excel Distribution Pipe values
+Install Python dependencies:
 
-## Load Calculation Formula
+1. Create/activate your Python environment
+2. Install packages:
 
-The plugin calculates loads using:
-```
-Load = LoadMultiplier × (BaseFactor + HeatFactorMultiplier × HeatFactor) + HUCPeakDemand
-```
+   pip install -r requirements.txt
 
-Default values:
-- Load Multiplier: 1.07 (configurable range: 0.001-10.0)
-- Heat Factor Multiplier: 56.8 (configurable range: 0.1-200.0)
+Note: QGIS Python environment provides the PyQt and QGIS bindings used by the plugin UI — run
+GUI components from inside QGIS or ensure QGIS Python environment is accessible to your interpreter.
 
-Factor codes ['0', '1', '20'] retain their Base Factor and Heat Factor values. All other factor codes have these values zeroed, leaving only HUC 3-Year Peak Demand in the calculation.
+## Installation (QGIS plugin)
 
-## Testing
+1. Copy the `gas_hydraulics` folder into your QGIS plugins directory (see QGIS docs for the exact
+   location on your OS).
+2. Launch QGIS, open Plugins > Manage and Install Plugins, and enable "Gas Hydraulics".
 
-Run the test suite:
-```
-python -m pytest tests/ -v
-```
+## PipeToNodeConverter (quick guide)
 
-Individual test files:
-- `tests/test_demand_analysis.py` - Demand file analysis tests
-- `tests/test_historical_analysis.py` - Historical analysis tests
-- `tests/test_forecast_plugin.py` - Forecast plugin tests
+- File: `gas_hydraulics/gas_hydraulics/pipe_to_node_converter.py`
+- Docs: `docs/PIPE_TO_NODE_CONVERTER_GUIDE.md`
 
-## Project Structure
+This converter produces CSV files and a Synergi demand script to help move pipeloaded outputs to
+node-loaded formats. The converter has a GUI dialog (recommended) but can be imported and used in
+scripts; see the converter guide for examples and expected input formats.
 
-```
-gas_hydraulics/
-├── gas_hydraulics/              # Main plugin package
-│   ├── __init__.py
-│   ├── metadata.txt
-│   ├── demand_file_analysis.py
-│   ├── historical_analysis.py
-│   └── forecast_plugin.py
-├── tests/                       # Test suite
-│   ├── __init__.py
-│   ├── test_demand_analysis.py
-│   ├── test_historical_analysis.py
-│   └── test_forecast_plugin.py
-├── docs/                        # Documentation
-├── requirements.txt
-└── README.md
-```
+## Running tests and basic validation
 
-## Troubleshooting
+- Run unit tests:
+  python -m pytest tests/ -v
 
-### Common Issues
+- Quick syntax/compile checks for core modules (example):
+  python -m py_compile gas_hydraulics/pipe_to_node_converter.py
 
-**Zero Load Results:**
-- Verify factor code logic matches your utility's rate structure
-- Check pipe name matching between Excel and GIS layers
-- Use audit features to trace data processing steps
+## Backups and the emoji-removal pass
 
-**Spatial Intersection Problems:**
-- Ensure zone and pipe layers have valid geometries
-- Adjust buffer pixel settings for intersection tolerance
-- Verify coordinate reference systems match
+During a repository-wide cleanup, emoji characters were removed from source and doc files to
+standardize text rendering across environments. The process created backup files for every file
+it modified. If you want to inspect or revert an automated change, look for the corresponding
+`.bak` file next to the modified file (for example `README.md.bak`). If you prefer to remove the
+backups (after review) you can delete `*.bak` files, but we recommend keeping them until you've
+verified all plugin behavior in your QGIS environment.
 
-**Excel Data Issues:**
-- Check for required column names and data types
-- Validate date formats in Install Date column
-- Ensure Distribution Pipe values match GIS layer
+## Troubleshooting (high level)
 
-### Debug Features
+- Zero or unexpected loads:
+  - Verify factor code handling and that the Excel "Distribution Pipe" values match GIS pipe names.
+  - Use the audit/logging panels included in the plugins to trace processing steps.
 
-All plugins include comprehensive audit capabilities:
-- Excel file structure validation
-- Layer geometry and attribute analysis
-- Step-by-step processing logs
-- Spatial intersection diagnostics
+- No historical data found:
+  - Ensure the Excel Install Date column contains valid dates and falls in your analysis period.
+
+- Spatial intersection issues:
+  - Confirm layer geometries and coordinate reference systems match.
+
+## Contributing
+
+1. Fork the repository
+2. Add feature or bugfix on a new branch
+3. Add tests for new behavior
+4. Ensure tests pass and linting/syntax checks succeed
+5. Submit a pull request
 
 ## License
 
 This project is licensed under the GNU General Public License v3.0.
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure all tests pass
-5. Submit a pull request
-
 ## Support
 
-For technical support or feature requests, please create an issue in the project repository.
+If you discover bugs or want enhancements, open an issue in the project tracker with a concise
+description and example data when possible.
