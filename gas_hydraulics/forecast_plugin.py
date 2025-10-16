@@ -29,6 +29,7 @@ class ForecastPlugin:
         """Initialize the Forecast plugin."""
         self.iface = iface
         self.action = None
+        self.pop_housing_data = None  # Store imported population/housing data
         
         # Check enhanced features availability on startup
         self.enhanced_features_available = self._check_enhanced_features()
@@ -2020,14 +2021,22 @@ class ForecastPlugin:
             
             # Data tab description
             data_desc = QLabel(
-                "Provide CSV files with historical population and housing data for enhanced forecasting:\n\n"
-                " Population Data: Historical population counts by area and year\n"
-                "️ Housing Units Data: Historical housing unit counts by area and year\n\n"
-                " Required CSV Format:\n"
-                "   • Area column: Matches zone names in your polygon layer\n"
-                "   • Year column: Numeric year values (e.g., 2020, 2021)\n"
-                "   • Value column: Population count or housing unit count\n\n"
-                "️ The system will use this data to calculate growth rates and project future loads."
+                "Provide a SINGLE CSV file with combined population and housing data for regression-based forecasting.\n\n"
+                " REQUIRED CSV FORMAT (case-insensitive headers):\n"
+                "   Year, Population, Housing\n"
+                "   2015, 125000, 48500\n"
+                "   2016, 128500, 49800\n"
+                "   2017, 132000, 51200\n"
+                "   ...\n\n"
+                " Column Definitions:\n"
+                "   • Year: Numeric year values (e.g., 2015, 2016, 2017...)\n"
+                "   • Population: Total population count for that year\n"
+                "   • Housing: Total housing unit count for that year\n\n"
+                " How It Works:\n"
+                "   Residential: Calculated as avg_load_per_housing_unit × future_housing_units\n"
+                "   Commercial/Industrial: Linear regression against Population (historical loads vs population)\n"
+                "   The system builds regression models (load = slope × population + intercept) and reports R² values\n\n"
+                " Tip: Need at least 2 years of historical data for regression. More data = better predictions!"
             )
             data_desc.setWordWrap(True)
             data_desc.setStyleSheet("color: #666; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
@@ -2039,81 +2048,42 @@ class ForecastPlugin:
             line2.setFrameShadow(QFrame.Sunken)
             data_main_layout.addWidget(line2)
             
-            # Population data group
-            pop_group = QGroupBox(" Population Data Configuration")
-            pop_layout = QFormLayout()
+            # Combined Population & Housing CSV group
+            data_group = QGroupBox(" Population & Housing Data File")
+            data_layout = QFormLayout()
             
-            self.pop_file_edit = QLineEdit()
-            self.pop_file_edit.setPlaceholderText("Select CSV file with population data...")
-            pop_browse_btn = QPushButton(" Browse...")
-            pop_browse_btn.clicked.connect(lambda: self.browse_file(self.pop_file_edit, "Population Data CSV"))
-            pop_browse_btn.setToolTip("Browse for population data CSV file")
-            pop_file_layout = QHBoxLayout()
-            pop_file_layout.addWidget(self.pop_file_edit)
-            pop_file_layout.addWidget(pop_browse_btn)
-            pop_layout.addRow(" Population CSV File:", pop_file_layout)
-            
-            self.pop_area_field = QLineEdit("Area")
-            self.pop_area_field.setToolTip(
-                "Column name containing area/zone names\n"
-                "Must match the zone names in your polygon layer"
+            self.pop_housing_file_edit = QLineEdit()
+            self.pop_housing_file_edit.setPlaceholderText("Select CSV file with Year, Population, Housing columns...")
+            pop_housing_browse_btn = QPushButton(" Browse...")
+            pop_housing_browse_btn.clicked.connect(
+                lambda: self.browse_file(self.pop_housing_file_edit, "Population & Housing Data CSV")
             )
-            pop_layout.addRow("️ Area Field Name:", self.pop_area_field)
-            
-            self.pop_year_field = QLineEdit("Year")
-            self.pop_year_field.setToolTip(
-                "Column name containing year values\n"
-                "Should be numeric (e.g., 2020, 2021, 2022)"
+            pop_housing_browse_btn.setToolTip(
+                "Browse for combined population and housing data CSV file\n"
+                "Must have columns: Year, Population, Housing (case-insensitive)"
             )
-            pop_layout.addRow(" Year Field Name:", self.pop_year_field)
+            file_layout = QHBoxLayout()
+            file_layout.addWidget(self.pop_housing_file_edit)
+            file_layout.addWidget(pop_housing_browse_btn)
+            data_layout.addRow(" CSV File:", file_layout)
             
-            self.pop_value_field = QLineEdit("Population")
-            self.pop_value_field.setToolTip(
-                "Column name containing population counts\n"
-                "Should be numeric values representing total population"
+            # Add import button
+            import_btn = QPushButton(" Import & Preview Data")
+            import_btn.clicked.connect(self.import_and_preview_pop_housing)
+            import_btn.setToolTip(
+                "Import the CSV file and preview the data\n"
+                "This validates the format and shows you what data will be used"
             )
-            pop_layout.addRow(" Population Field Name:", self.pop_value_field)
+            data_layout.addRow("", import_btn)
             
-            pop_group.setLayout(pop_layout)
-            data_main_layout.addWidget(pop_group)
+            # Add a preview label
+            self.pop_housing_preview_label = QLabel("No data loaded yet.")
+            self.pop_housing_preview_label.setWordWrap(True)
+            self.pop_housing_preview_label.setStyleSheet("color: #666; font-style: italic;")
+            data_layout.addRow(" Data Preview:", self.pop_housing_preview_label)
             
-            # Housing data group
-            housing_group = QGroupBox("️ Housing Units Data Configuration")
-            housing_layout = QFormLayout()
-            
-            self.housing_file_edit = QLineEdit()
-            self.housing_file_edit.setPlaceholderText("Select CSV file with housing data...")
-            housing_browse_btn = QPushButton(" Browse...")
-            housing_browse_btn.clicked.connect(lambda: self.browse_file(self.housing_file_edit, "Housing Data CSV"))
-            housing_browse_btn.setToolTip("Browse for housing units data CSV file")
-            housing_file_layout = QHBoxLayout()
-            housing_file_layout.addWidget(self.housing_file_edit)
-            housing_file_layout.addWidget(housing_browse_btn)
-            housing_layout.addRow(" Housing CSV File:", housing_file_layout)
-            
-            self.housing_area_field = QLineEdit("Area")
-            self.housing_area_field.setToolTip(
-                "Column name containing area/zone names\n"
-                "Must match the zone names in your polygon layer"
-            )
-            housing_layout.addRow("️ Area Field Name:", self.housing_area_field)
-            
-            self.housing_year_field = QLineEdit("Year")
-            self.housing_year_field.setToolTip(
-                "Column name containing year values\n"
-                "Should be numeric (e.g., 2020, 2021, 2022)"
-            )
-            housing_layout.addRow(" Year Field Name:", self.housing_year_field)
-            
-            self.housing_value_field = QLineEdit("Housing_Units")
-            self.housing_value_field.setToolTip(
-                "Column name containing housing unit counts\n"
-                "Should be numeric values representing total housing units"
-            )
-            housing_layout.addRow(" Housing Units Field:", self.housing_value_field)
-            
-            housing_group.setLayout(housing_layout)
-            data_main_layout.addWidget(housing_group)
+            data_group.setLayout(data_layout)
+            data_main_layout.addWidget(data_group)
             
             data_main_layout.addStretch()
             data_tab.setLayout(data_main_layout)
@@ -2360,6 +2330,131 @@ class ForecastPlugin:
                 line_edit.setText(file_path)
         except Exception as e:
             LOGGER.error(f"Error browsing file: {e}")
+
+    def import_and_preview_pop_housing(self):
+        """Import and preview the population/housing CSV data."""
+        try:
+            import pandas as pd
+            from qgis.PyQt.QtWidgets import QMessageBox
+            
+            file_path = self.pop_housing_file_edit.text().strip()
+            
+            if not file_path:
+                QMessageBox.warning(
+                    self.iface.mainWindow(),
+                    "No File Selected",
+                    "Please select a CSV file first using the Browse button."
+                )
+                return
+            
+            # Read CSV
+            df = pd.read_csv(file_path)
+            
+            # Validate columns (case insensitive)
+            required_cols = ['year', 'population', 'housing']
+            df_lower = df.columns.str.lower()
+            
+            missing_cols = []
+            for col in required_cols:
+                if col not in df_lower.tolist():
+                    missing_cols.append(col)
+            
+            if missing_cols:
+                QMessageBox.critical(
+                    self.iface.mainWindow(),
+                    "Invalid CSV Format",
+                    f"CSV must contain these columns (case-insensitive):\n"
+                    f"  • Year\n"
+                    f"  • Population\n"
+                    f"  • Housing\n\n"
+                    f"Missing columns: {', '.join(missing_cols)}\n\n"
+                    f"Your CSV has: {', '.join(df.columns.tolist())}"
+                )
+                self.pop_housing_preview_label.setText("Error: Invalid CSV format.")
+                self.pop_housing_preview_label.setStyleSheet("color: red; font-style: italic;")
+                return
+            
+            # Standardize column names
+            col_mapping = {}
+            for col in df.columns:
+                if col.lower() == 'year':
+                    col_mapping[col] = 'Year'
+                elif col.lower() == 'population':
+                    col_mapping[col] = 'Population'
+                elif col.lower() == 'housing':
+                    col_mapping[col] = 'Housing'
+            
+            df = df.rename(columns=col_mapping)[['Year', 'Population', 'Housing']]
+            
+            # Remove rows with missing data
+            df = df.dropna()
+            
+            # Convert to numeric
+            df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
+            df['Population'] = pd.to_numeric(df['Population'], errors='coerce')
+            df['Housing'] = pd.to_numeric(df['Housing'], errors='coerce')
+            
+            # Remove invalid data
+            df = df.dropna()
+            
+            if df.empty:
+                QMessageBox.warning(
+                    self.iface.mainWindow(),
+                    "No Valid Data",
+                    "No valid numeric data found in CSV file after cleaning."
+                )
+                self.pop_housing_preview_label.setText("Error: No valid data.")
+                self.pop_housing_preview_label.setStyleSheet("color: red; font-style: italic;")
+                return
+            
+            # Sort by year
+            df = df.sort_values('Year')
+            
+            # Store the dataframe for later use
+            self.pop_housing_data = df
+            
+            # Create preview message
+            year_range = f"{int(df['Year'].min())} to {int(df['Year'].max())}"
+            pop_range = f"{int(df['Population'].min()):,} to {int(df['Population'].max()):,}"
+            housing_range = f"{int(df['Housing'].min()):,} to {int(df['Housing'].max()):,}"
+            
+            preview_text = (
+                f"Successfully loaded {len(df)} years of data!\n"
+                f"Year range: {year_range}\n"
+                f"Population range: {pop_range}\n"
+                f"Housing range: {housing_range}\n"
+                f"This data will be used for regression-based forecasting."
+            )
+            
+            self.pop_housing_preview_label.setText(preview_text)
+            self.pop_housing_preview_label.setStyleSheet("color: green; font-style: normal;")
+            
+            LOGGER.info(f"Successfully imported population/housing data: {len(df)} rows")
+            LOGGER.info(f"Year range: {year_range}")
+            
+            QMessageBox.information(
+                self.iface.mainWindow(),
+                "Data Import Successful",
+                preview_text
+            )
+            
+        except FileNotFoundError:
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "File Not Found",
+                f"The file does not exist:\n{file_path}"
+            )
+            self.pop_housing_preview_label.setText("Error: File not found.")
+            self.pop_housing_preview_label.setStyleSheet("color: red; font-style: italic;")
+        except Exception as e:
+            LOGGER.error(f"Error importing population/housing CSV: {e}")
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Import Error",
+                f"Failed to import CSV:\n{str(e)}"
+            )
+            self.pop_housing_preview_label.setText(f"Error: {str(e)}")
+            self.pop_housing_preview_label.setStyleSheet("color: red; font-style: italic;")
 
     def populate_default_priority_zones(self):
         """Populate the priority zones table with some default examples."""
@@ -3317,8 +3412,8 @@ class ForecastPlugin:
                     writer.writerow([f'SUBZONE: {area}'])
                     writer.writerow([])  # Empty row
                     
-                    # Write table header
-                    header = ['Year', 'Residential (GJ/d)', 'Commercial (GJ/d)', 'Industrial (GJ/d)', 'Total (GJ/d)']
+                    # Write table header with date column
+                    header = ['Year', 'DateTime', 'Residential (GJ/d)', 'Commercial (GJ/d)', 'Industrial (GJ/d)', 'Total (GJ/d)']
                     writer.writerow(header)
                     
                     # Write data rows for each year
@@ -3339,9 +3434,21 @@ class ForecastPlugin:
                         
                         total = residential + commercial + industrial
                         
-                        # Write row
+                        # Format year as human-readable string: "2025"
+                        year_str = str(year)
+                        
+                        # Format datetime - use format that works with Synergi
+                        # Based on testing: Python datetime objects work when exported to shapefile
+                        # For CSV, we'll use the ISO format which should be recognized
+                        from datetime import datetime
+                        datetime_obj = datetime(year, 11, 11)
+                        # Convert to string for CSV: ISO format YYYY-MM-DD
+                        datetime_str = datetime_obj.strftime("%Y-%m-%d")
+                        
+                        # Write row with date columns
                         row = [
-                            year,
+                            year_str,  # Human-readable year
+                            datetime_str,  # ISO datetime format: YYYY-MM-DD HH:MM:SS
                             f"{residential:.2f}",
                             f"{commercial:.2f}", 
                             f"{industrial:.2f}",

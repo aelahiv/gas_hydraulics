@@ -655,6 +655,99 @@ class LoadAssignmentTool:
         result = dialog.exec_()
         return result == QDialog.Accepted
     
+    def _export_synergi_shapefile(self, qgis_layer):
+        """Export QGIS layer to Synergi-compatible shapefile using GeoPandas.
+        
+        GeoPandas preserves datetime objects correctly (Format 11/12 from testing),
+        whereas QGIS's export converts them in ways that break Synergi compatibility.
+        
+        Args:
+            qgis_layer: QGIS vector layer with YEAR field
+            
+        Returns:
+            str: Path to exported Synergi-compatible shapefile
+        """
+        import geopandas as gpd
+        import pandas as pd
+        from datetime import datetime
+        import tempfile
+        import os
+        
+        # Export QGIS layer to temporary shapefile first
+        temp_dir = tempfile.gettempdir()
+        temp_shp = os.path.join(temp_dir, "qgis_temp_export.shp")
+        
+        from qgis.core import QgsVectorFileWriter, QgsCoordinateReferenceSystem
+        error = QgsVectorFileWriter.writeAsVectorFormat(
+            qgis_layer,
+            temp_shp,
+            "utf-8",
+            qgis_layer.crs(),
+            "ESRI Shapefile"
+        )
+        
+        if error[0] != QgsVectorFileWriter.NoError:
+            raise Exception(f"Failed to export temporary shapefile: {error}")
+        
+        # Read with GeoPandas
+        gdf = gpd.read_file(temp_shp)
+        
+        # Remove existing DATETIME field (it's a string from QGIS)
+        if 'DATETIME' in gdf.columns:
+            gdf = gdf.drop(columns=['DATETIME'])
+        
+        # Remove SYN_DATE if it exists
+        if 'SYN_DATE' in gdf.columns:
+            gdf = gdf.drop(columns=['SYN_DATE'])
+        
+        # Create DATETIME as Excel serial date (Format 14 - confirmed working!)
+        # CRITICAL: Store as STRING (Character field), not numeric
+        # Format 14 test used Character field with serial number as text: '45971'
+        # Excel serial = days since 1899-12-30 (Excel's epoch)
+        if 'YEAR' in gdf.columns or 'Year' in gdf.columns:
+            year_col = 'YEAR' if 'YEAR' in gdf.columns else 'Year'
+            
+            def year_to_excel_serial_string(year_str):
+                """Convert year to Excel serial date STRING for November 11th."""
+                if pd.isna(year_str) or not str(year_str).strip():
+                    return ""
+                try:
+                    year = int(year_str)
+                    # November 11th
+                    target_date = pd.Timestamp(year, 11, 11)
+                    # Excel epoch (serial 1 = 1900-01-01, but use 1899-12-30 due to Excel bug)
+                    epoch = pd.Timestamp(1899, 12, 30)
+                    serial = (target_date - epoch).days
+                    return str(serial)  # Return as STRING, not float!
+                except:
+                    return ""
+            
+            gdf['DATETIME'] = gdf[year_col].apply(year_to_excel_serial_string)
+        
+        # Determine output path
+        layer_source = qgis_layer.source()
+        if layer_source and layer_source.endswith('.shp'):
+            base_path = layer_source.replace('.shp', '')
+            output_path = f"{base_path}_synergi.shp"
+        else:
+            # Use same directory as temp file
+            layer_name = qgis_layer.name().replace(' ', '_')
+            output_path = os.path.join(os.path.dirname(temp_shp), f"{layer_name}_synergi.shp")
+        
+        # Write using GeoPandas (preserves datetime objects correctly!)
+        gdf.to_file(output_path)
+        
+        # Clean up temp files
+        for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
+            temp_file = temp_shp.replace('.shp', ext)
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+        
+        return output_path
+    
     def assign_loads_to_pipes(self, pipe_layer, polygon_layer, forecast_data, start_year, name_field):
         """Assign loads to pipes based on spatial intersection and forecast data.
         
@@ -670,7 +763,7 @@ class LoadAssignmentTool:
         """
         try:
             from qgis.core import QgsField, QgsSpatialIndex
-            from qgis.PyQt.QtCore import QVariant
+            from qgis.PyQt.QtCore import QVariant, QDate
             
             # Start editing pipe layer
             pipe_layer.startEditing()
@@ -684,8 +777,14 @@ class LoadAssignmentTool:
                 pipe_layer.addAttribute(QgsField('LOAD', QVariant.Double))
             if 'PROP' not in existing_fields_map:
                 pipe_layer.addAttribute(QgsField('PROP', QVariant.String))
+            if 'YEAR' not in existing_fields_map:
+                pipe_layer.addAttribute(QgsField('YEAR', QVariant.String))
             if 'DATETIME' not in existing_fields_map:
-                pipe_layer.addAttribute(QgsField('DATETIME', QVariant.String))
+                # Human-readable date for QGIS display
+                pipe_layer.addAttribute(QgsField('DATETIME', QVariant.String, len=15))
+            if 'SYN_DATE' not in existing_fields_map:
+                # Integer date for Synergi (YYYYMMDD format - QGIS won't convert integers)
+                pipe_layer.addAttribute(QgsField('SYN_DATE', QVariant.Int))
             
             pipe_layer.updateFields()
             
@@ -695,6 +794,7 @@ class LoadAssignmentTool:
             load_field = find_field_name_case_insensitive(pipe_layer, 'LOAD')
             prop_field = find_field_name_case_insensitive(pipe_layer, 'PROP')
             datetime_field = find_field_name_case_insensitive(pipe_layer, 'DATETIME')
+            syn_date_field = find_field_name_case_insensitive(pipe_layer, 'SYN_DATE')
             
             # Create spatial index for polygons
             LOGGER.info("Creating spatial index for polygons...")
@@ -745,7 +845,9 @@ class LoadAssignmentTool:
                 'DESC': pipe_layer.fields().indexFromName(desc_field),
                 'LOAD': pipe_layer.fields().indexFromName(load_field),
                 'PROP': pipe_layer.fields().indexFromName(prop_field),
-                'DATETIME': pipe_layer.fields().indexFromName(datetime_field)
+                'YEAR': pipe_layer.fields().indexFromName(year_field),
+                'DATETIME': pipe_layer.fields().indexFromName(datetime_field),
+                'SYN_DATE': pipe_layer.fields().indexFromName(syn_date_field)
             }
             
             for poly_name, year_pipes in pipe_groups.items():
@@ -765,15 +867,25 @@ class LoadAssignmentTool:
                         # Generate description
                         desc = f"{poly_name} - {period_years} Year Load"
                         
-                        # Generate datetime
-                        dt_str = f"{pipe_year}-11-01"
+                        # Generate human-readable year string
+                        year_str = str(pipe_year)
+                        
+                        # Create two date representations:
+                        # 1. DATETIME: Human-readable string for QGIS display (11-Nov-2025)
+                        datetime_str = f"11-Nov-{pipe_year}"
+                        
+                        # 2. SYN_DATE: Integer in YYYYMMDD format for Synergi
+                        #    QGIS won't convert integers, so Synergi will receive raw value
+                        syn_date_int = (pipe_year * 10000) + 1111  # November 11th = YYYYMMDD format
                         
                         # Update each pipe
                         for pipe_id in pipe_ids:
                             pipe_layer.changeAttributeValue(pipe_id, field_indices['DESC'], desc)
                             pipe_layer.changeAttributeValue(pipe_id, field_indices['LOAD'], load_per_pipe)
                             pipe_layer.changeAttributeValue(pipe_id, field_indices['PROP'], 'Proposed')
-                            pipe_layer.changeAttributeValue(pipe_id, field_indices['DATETIME'], dt_str)
+                            pipe_layer.changeAttributeValue(pipe_id, field_indices['YEAR'], year_str)
+                            pipe_layer.changeAttributeValue(pipe_id, field_indices['DATETIME'], datetime_str)
+                            pipe_layer.changeAttributeValue(pipe_id, field_indices['SYN_DATE'], syn_date_int)
             
             # Commit changes
             pipe_layer.commitChanges()
@@ -781,10 +893,26 @@ class LoadAssignmentTool:
             # Refresh layer
             pipe_layer.triggerRepaint()
             
+            # Export Synergi-compatible shapefile using GeoPandas
+            synergi_export_msg = ""
+            try:
+                synergi_path = self._export_synergi_shapefile(pipe_layer)
+                synergi_export_msg = f"\n\n✓ Synergi-ready shapefile exported:\n  {synergi_path}\n  (Use this file for Synergi import, not the QGIS layer)"
+            except Exception as e:
+                LOGGER.warning(f"Could not export Synergi shapefile: {e}")
+                synergi_export_msg = f"\n\n⚠ Could not auto-export Synergi file: {e}\n  You can manually export using: python fix_datetime_for_synergi.py"
+            
             message = (
                 f"Load assignment completed successfully!\n\n"
                 f"Processed {len(pipe_polygon_map)} pipes across {len(pipe_groups)} areas.\n\n"
-                f"Added/Updated fields: DESC, LOAD, PROP, DATETIME"
+                f"Added/Updated fields:\n"
+                f"  DESC = Description\n"
+                f"  LOAD = Load value (GJ/d)\n"
+                f"  PROP = Status ('Proposed')\n"
+                f"  YEAR = Human-readable year (e.g., '2025')\n"
+                f"  DATETIME = Human-readable date (11-Nov-YYYY)\n"
+                f"  SYN_DATE = Integer date for Synergi (YYYYMMDD)\n"
+                f"{synergi_export_msg}"
             )
             
             return True, message

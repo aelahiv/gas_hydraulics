@@ -1,9 +1,10 @@
 """Main plugin module for GasHydraulics plugin.
 
-This module provides a unified interface to three specialized gas hydraulics analysis tools:
+This module provides a unified interface to four specialized gas hydraulics analysis tools:
 1. Demand File Analysis - Current year load analysis
 2. Historical Analysis - Historical load trends
 3. Load Forecast - Future load projections
+4. Pipe to Node Converter - Convert pipe-loaded models to node-loaded format
 
 The plugin avoids importing QGIS at top-level so it can be imported in a normal
 Python environment (for testing).
@@ -28,6 +29,7 @@ class GasHydraulicsPlugin:
         self.demand_analysis = None
         self.historical_analysis = None
         self.forecast_plugin = None
+        self.pipe_to_node_converter = None
 
     def initGui(self):
         """Create GUI elements (only when running inside QGIS)."""
@@ -37,11 +39,13 @@ class GasHydraulicsPlugin:
             from .demand_file_analysis import DemandFileAnalysisPlugin
             from .historical_analysis import HistoricalAnalysisPlugin
             from .forecast_plugin import ForecastPlugin
+            from .pipe_to_node_converter import PipeToNodeConverter
 
             # Initialize sub-plugins
             self.demand_analysis = DemandFileAnalysisPlugin(self.iface)
             self.historical_analysis = HistoricalAnalysisPlugin(self.iface)
             self.forecast_plugin = ForecastPlugin(self.iface)
+            self.pipe_to_node_converter = PipeToNodeConverter(self.iface)
 
             # Create main menu
             if self.iface:
@@ -57,6 +61,10 @@ class GasHydraulicsPlugin:
                 forecast_action = QAction("Load Forecast", self.iface.mainWindow())
                 forecast_action.triggered.connect(self.forecast_plugin.run)
                 self.actions.append(forecast_action)
+
+                converter_action = QAction("Pipe to Node Converter", self.iface.mainWindow())
+                converter_action.triggered.connect(self.pipe_to_node_converter.run)
+                self.actions.append(converter_action)
 
                 # Add main selection action
                 main_action = QAction("Gas Hydraulics Analysis", self.iface.mainWindow())
@@ -95,7 +103,8 @@ class GasHydraulicsPlugin:
                 items = [
                     "Demand File Analysis - Current year load breakdown",
                     "Historical Analysis - Historical load trends", 
-                    "Load Forecast - Future load projections"
+                    "Load Forecast - Future load projections",
+                    "Pipe to Node Converter - Convert pipe-loaded models to node-loaded"
                 ]
                 
                 item, ok = QInputDialog.getItem(
@@ -112,6 +121,8 @@ class GasHydraulicsPlugin:
                         self.historical_analysis.run()
                     elif "Forecast" in item:
                         self.forecast_plugin.run()
+                    elif "Pipe to Node" in item:
+                        self.pipe_to_node_converter.run()
             else:
                 # Non-QGIS execution - run all analyses
                 print("Gas Hydraulics Plugin - Running all analyses:")

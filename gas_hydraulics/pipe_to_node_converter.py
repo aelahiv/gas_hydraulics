@@ -33,9 +33,8 @@ class PipeToNodeConverter:
         # Default parameters
         self.diameter_threshold = 900  # mm - threshold for LTPS vs GA pipes
         
-        # File paths (will be set by user)
-        self.input_node_load_path = None
-        self.input_pipes_data_path = None
+        # Layer selection (will be set by user)
+        self.pipe_layer = None
         self.output_dir = None
         
         # Data storage
@@ -81,9 +80,11 @@ class PipeToNodeConverter:
         try:
             from qgis.PyQt.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                            QPushButton, QLineEdit, QFileDialog, QGroupBox,
-                                           QFormLayout, QSpinBox, QFrame, QDoubleSpinBox)
+                                           QFormLayout, QSpinBox, QFrame, QDoubleSpinBox,
+                                           QComboBox)
             from qgis.PyQt.QtGui import QFont
             from qgis.PyQt.QtCore import Qt
+            from qgis.core import QgsProject, QgsVectorLayer
             
             dialog = QDialog(self.iface.mainWindow() if self.iface else None)
             dialog.setWindowTitle("Pipe-to-Node Load Converter")
@@ -103,17 +104,22 @@ class PipeToNodeConverter:
             desc_label = QLabel(
                 "Convert pipe-loaded hydraulic models to node-loaded models for Synergi:\n\n"
                 " Process Overview:\n"
-                "   1. Identify LTPS (Large Transmission Pipes) vs GA (Gate Artery) pipes by diameter\n"
-                "   2. Validate connections between LTPS and GA pipes at intersection nodes\n"
-                "   3. Extract flow categories from pipe descriptions\n"
-                "   4. Sum loads at terminal nodes for facility load shifting\n"
-                "   5. Generate node demand file with proper category assignments\n"
-                "   6. Create Synergi demand script (.dsf) for model import\n\n"
+                "   1. Read pipe data from QGIS layer attribute table\n"
+                "   2. Identify LTPS vs GA pipes by Name column pattern and diameter\n"
+                "   3. Validate connections between LTPS and GA pipes at intersection nodes\n"
+                "   4. Extract flow categories from pipe descriptions\n"
+                "   5. Sum loads at terminal nodes for facility load shifting\n"
+                "   6. Generate node demand file with proper category assignments\n"
+                "   7. Create Synergi demand script (.dsf) for model import\n\n"
                 " Outputs Generated:\n"
                 "   • node_ex.csv: Node loads aggregated by category\n"
                 "   • cat_setup.csv: Flow category configuration\n"
                 "   • synergi_demand_script.dsf: Synergi import script\n"
                 "   • connections.csv: Validated LTPS-GA pipe connections\n\n"
+                " Name Column Pattern:\n"
+                "   The 'Name' column is used to distinguish pipe types:\n"
+                "   • LTPS pipes: Name starts with 'LTPS' (e.g., 'LTPS_Main_001')\n"
+                "   • GA pipes: Name starts with 'GA' (e.g., 'GA_Branch_042')\n\n"
                 " Tip: Ensure pipe descriptions follow format 'CategoryName - Details'"
             )
             desc_label.setWordWrap(True)
@@ -126,53 +132,39 @@ class PipeToNodeConverter:
             line.setFrameShadow(QFrame.Sunken)
             layout.addWidget(line)
             
-            # Input files group
-            input_group = QGroupBox(" Input Data Files")
+            # Input layer group
+            input_group = QGroupBox(" Input Pipe Layer")
             input_layout = QFormLayout()
             
-            # LTPS pipes CSV
-            ltps_label = QLabel(" LTPS Pipes CSV:")
-            ltps_label.setToolTip(
-                "CSV file containing pipe data with loads\n"
-                "Required columns:\n"
-                "  • Name: Pipe identifier\n"
+            # Get available vector layers
+            project = QgsProject.instance()
+            vector_layers = [layer for layer in project.mapLayers().values() 
+                           if isinstance(layer, QgsVectorLayer)]
+            layer_names = [layer.name() for layer in vector_layers]
+            
+            # Pipe layer selection
+            pipe_layer_label = QLabel(" Pipe Network Layer:")
+            pipe_layer_label.setToolTip(
+                "Select the pipe layer containing load data\n\n"
+                "Required Attributes:\n"
+                "  • Name: Pipe identifier (starts with 'LTPS' or 'GA')\n"
                 "  • Diameter (mm): Pipe diameter in millimeters\n"
                 "  • Load (GJ/d): Load on pipe in GJ/day\n"
                 "  • To-Node Name: Destination node identifier\n"
                 "  • From-Node Name: Source node identifier\n"
-                "  • Description: Pipe description (format: 'Category - Details')"
+                "  • Description: Pipe description (format: 'Category - Details')\n\n"
+                "The Name column will be used to classify pipes:\n"
+                "  • Names starting with 'LTPS' = Large Transmission Pipes\n"
+                "  • Names starting with 'GA' = Gate Artery pipes"
             )
             
-            ltps_layout = QHBoxLayout()
-            self.ltps_path_edit = QLineEdit()
-            self.ltps_path_edit.setPlaceholderText("Select CSV file with pipe loads...")
-            ltps_browse_btn = QPushButton(" Browse...")
-            ltps_browse_btn.clicked.connect(lambda: self.browse_file(self.ltps_path_edit, "LTPS Pipes CSV"))
-            ltps_browse_btn.setToolTip("Browse for LTPS pipes CSV file")
-            ltps_layout.addWidget(self.ltps_path_edit)
-            ltps_layout.addWidget(ltps_browse_btn)
-            input_layout.addRow(ltps_label, ltps_layout)
-            
-            # All pipes CSV
-            pipes_label = QLabel(" All Pipes CSV:")
-            pipes_label.setToolTip(
-                "CSV file containing complete pipe network data\n"
-                "Required columns:\n"
-                "  • Name: Pipe identifier\n"
-                "  • To-Node Name: Destination node identifier\n"
-                "  • From-Node Name: Source node identifier\n"
-                "Used for connectivity analysis and intersection detection"
+            self.pipe_layer_combo = QComboBox()
+            self.pipe_layer_combo.addItems(layer_names)
+            self.pipe_layer_combo.setToolTip(
+                "Select the layer with pipe data\n"
+                "Must have Name, Diameter, Load, To-Node, From-Node, Description attributes"
             )
-            
-            pipes_layout = QHBoxLayout()
-            self.pipes_path_edit = QLineEdit()
-            self.pipes_path_edit.setPlaceholderText("Select CSV file with all pipes network...")
-            pipes_browse_btn = QPushButton(" Browse...")
-            pipes_browse_btn.clicked.connect(lambda: self.browse_file(self.pipes_path_edit, "All Pipes CSV"))
-            pipes_browse_btn.setToolTip("Browse for complete pipes network CSV file")
-            pipes_layout.addWidget(self.pipes_path_edit)
-            pipes_layout.addWidget(pipes_browse_btn)
-            input_layout.addRow(pipes_label, pipes_layout)
+            input_layout.addRow(pipe_layer_label, self.pipe_layer_combo)
             
             input_group.setLayout(input_layout)
             layout.addWidget(input_group)
@@ -211,9 +203,10 @@ class PipeToNodeConverter:
             diameter_label = QLabel(" Diameter Threshold (mm):")
             diameter_label.setToolTip(
                 "Diameter threshold to distinguish pipe types:\n"
-                "  • Pipes > threshold: LTPS (Large Transmission Pipes)\n"
-                "  • Pipes ≤ threshold: GA (Gate Artery) pipes\n"
-                "Typical value: 900mm"
+                "  • Pipes > threshold: LTPS\n"
+                "  • Pipes ≤ threshold: GA pipes\n"
+                "Typical value: 900mm\n\n"
+                "Note: Pipes are also classified by Name prefix ('LTPS' or 'GA')"
             )
             
             self.diameter_spin = QSpinBox()
@@ -268,8 +261,15 @@ class PipeToNodeConverter:
             
             # Show dialog and collect results
             if dialog.exec_() == dialog.Accepted:
-                self.input_node_load_path = self.ltps_path_edit.text()
-                self.input_pipes_data_path = self.pipes_path_edit.text()
+                # Get selected layer
+                from qgis.core import QgsProject, QgsVectorLayer
+                project = QgsProject.instance()
+                vector_layers = [layer for layer in project.mapLayers().values() 
+                               if isinstance(layer, QgsVectorLayer)]
+                
+                if self.pipe_layer_combo.currentIndex() >= 0:
+                    self.pipe_layer = vector_layers[self.pipe_layer_combo.currentIndex()]
+                
                 self.output_dir = self.output_dir_edit.text()
                 self.diameter_threshold = self.diameter_spin.value()
                 
@@ -326,13 +326,22 @@ class PipeToNodeConverter:
             
             errors = []
             
-            # Check LTPS pipes file
-            if not self.input_node_load_path or not os.path.exists(self.input_node_load_path):
-                errors.append(" LTPS Pipes CSV file not found")
-            
-            # Check all pipes file
-            if not self.input_pipes_data_path or not os.path.exists(self.input_pipes_data_path):
-                errors.append(" All Pipes CSV file not found")
+            # Check pipe layer
+            if not self.pipe_layer:
+                errors.append(" Pipe layer not selected")
+            else:
+                # Check required fields
+                required_fields = ['Name', 'Diameter (mm)', 'Load (GJ/d)', 'To-Node Name', 
+                                 'From-Node Name', 'Description']
+                layer_fields = [field.name() for field in self.pipe_layer.fields()]
+                missing_fields = [f for f in required_fields if f not in layer_fields]
+                
+                if missing_fields:
+                    errors.append(f" Layer missing required fields: {', '.join(missing_fields)}")
+                
+                # Check if layer has features
+                if self.pipe_layer.featureCount() == 0:
+                    errors.append(" Selected layer has no features")
             
             # Check output directory
             if not self.output_dir:
@@ -440,10 +449,17 @@ class PipeToNodeConverter:
             self.show_error("Conversion Error", f"Error during conversion: {str(e)}")
     
     def load_and_classify_pipes(self):
-        """Load LTPS pipes data and classify by diameter."""
+        """Load pipes data from QGIS layer and classify by Name pattern and diameter."""
         try:
-            # Load the data
-            df = pd.read_csv(self.input_node_load_path)
+            # Read layer data into pandas DataFrame
+            data = []
+            for feature in self.pipe_layer.getFeatures():
+                attrs = feature.attributes()
+                field_names = [field.name() for field in self.pipe_layer.fields()]
+                row_dict = dict(zip(field_names, attrs))
+                data.append(row_dict)
+            
+            df = pd.DataFrame(data)
             
             # Validate required columns
             required_columns = ['Name', 'Diameter (mm)', 'Load (GJ/d)', 'To-Node Name', 'Description']
@@ -452,49 +468,76 @@ class PipeToNodeConverter:
             if missing_columns:
                 self.show_error(
                     "Missing Columns",
-                    f"LTPS Pipes CSV is missing required columns:\n{', '.join(missing_columns)}"
+                    f"Pipe layer is missing required attributes:\n{', '.join(missing_columns)}"
                 )
                 return False
             
-            # Filter and sort pipes based on diameter threshold
-            self.df_ltps = df[df['Diameter (mm)'] > self.diameter_threshold].sort_values(
+            # Classify pipes by Name column pattern (LTPS vs GA)
+            # LTPS pipes: Name starts with "LTPS"
+            # GA pipes: Name starts with "GA"
+            # Also filter by diameter as secondary check
+            df_ltps_name = df[df['Name'].str.startswith('LTPS', na=False)]
+            df_ga_name = df[df['Name'].str.startswith('GA', na=False)]
+            
+            # Also apply diameter threshold
+            self.df_ltps = df_ltps_name[df_ltps_name['Diameter (mm)'] > self.diameter_threshold].sort_values(
                 by='Load (GJ/d)', ascending=False
             )
-            self.df_drop = df[df['Diameter (mm)'] <= self.diameter_threshold].sort_values(
+            self.df_drop = df_ga_name[df_ga_name['Diameter (mm)'] <= self.diameter_threshold].sort_values(
                 by='Load (GJ/d)', ascending=False
             )
             
-            print(f"\n Classified pipes:")
-            print(f"   LTPS pipes (>{self.diameter_threshold}mm): {len(self.df_ltps)}")
-            print(f"   GA pipes (≤{self.diameter_threshold}mm): {len(self.df_drop)}")
+            print(f"\n Classified pipes from layer '{self.pipe_layer.name()}':")
+            print(f"   LTPS pipes (Name starts with 'LTPS', >{self.diameter_threshold}mm): {len(self.df_ltps)}")
+            print(f"   GA pipes (Name starts with 'GA', ≤{self.diameter_threshold}mm): {len(self.df_drop)}")
+            print(f"   Total features in layer: {self.pipe_layer.featureCount()}")
+            
+            if len(self.df_ltps) == 0:
+                self.show_error(
+                    "No LTPS Pipes Found",
+                    "No pipes found with Name starting with 'LTPS' and diameter > threshold.\n\n"
+                    "Please verify:\n"
+                    "  • Pipe names follow the pattern 'LTPS_xxx' for LTPS pipes\n"
+                    f"  • Diameter values are greater than {self.diameter_threshold}mm for LTPS pipes"
+                )
+                return False
             
             return True
             
         except Exception as e:
-            self.show_error("Load Error", f"Error loading and classifying pipes: {str(e)}")
+            self.show_error("Load Error", f"Error loading and classifying pipes from layer: {str(e)}")
             return False
     
     def load_pipes_data(self):
-        """Load complete pipes network data."""
+        """Load complete pipes network data from the same layer."""
         try:
-            self.pipes_df = pd.read_csv(self.input_pipes_data_path)
+            # Read all features from layer into DataFrame
+            # This is the same data as load_and_classify_pipes but includes ALL pipes
+            data = []
+            for feature in self.pipe_layer.getFeatures():
+                attrs = feature.attributes()
+                field_names = [field.name() for field in self.pipe_layer.fields()]
+                row_dict = dict(zip(field_names, attrs))
+                data.append(row_dict)
             
-            # Validate required columns
+            self.pipes_df = pd.DataFrame(data)
+            
+            # Validate required columns for connectivity analysis
             required_columns = ['Name', 'To-Node Name', 'From-Node Name']
             missing_columns = [col for col in required_columns if col not in self.pipes_df.columns]
             
             if missing_columns:
                 self.show_error(
                     "Missing Columns",
-                    f"All Pipes CSV is missing required columns:\n{', '.join(missing_columns)}"
+                    f"Pipe layer is missing required attributes:\n{', '.join(missing_columns)}"
                 )
                 return False
             
-            print(f" Loaded {len(self.pipes_df)} pipes from network data")
+            print(f" Loaded {len(self.pipes_df)} pipes from layer for network analysis")
             return True
             
         except Exception as e:
-            self.show_error("Load Error", f"Error loading pipes data: {str(e)}")
+            self.show_error("Load Error", f"Error loading pipes data from layer: {str(e)}")
             return False
     
     def group_loads_by_nodes(self):
