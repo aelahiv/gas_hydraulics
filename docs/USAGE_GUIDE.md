@@ -124,7 +124,8 @@ historical_data = plugin.analyze_historical_loads_by_period(
 2. Input current loads by area and class
 3. Input ultimate loads by area and class
 4. Provide growth projection data
-5. Review forecast tables and charts
+5. Configure priority zones (optional)
+6. Review forecast tables and charts
 
 **Example Code**:
 ```python
@@ -143,11 +144,72 @@ ultimate_loads = {
 
 growth_projection = {year: 50 + year * 0.5 for year in range(2025, 2046)}
 
+# Optional: Configure priority zones
+priority_zones = [
+    {
+        'zone_name': 'Zone C',
+        'priority_level': 'Zero Priority (0.0x)',
+        'start_year': 2025,
+        'end_year': 2035
+    }
+]
+
 plugin = ForecastPlugin(iface)
 forecasts = plugin.create_forecast_scenarios(
-    current_loads, ultimate_loads, growth_projection
+    current_loads, ultimate_loads, growth_projection, priority_zones
 )
 ```
+
+#### D) Load Assignment (Assign Forecast to Pipes)
+
+**Purpose**: Assign forecasted loads from CSV to pipe infrastructure
+
+**Steps**:
+1. Generate a forecast CSV file (from Load Forecast tool)
+2. Prepare pipe layer with Year field indicating construction period
+3. Select `Load Assignment` from Forecast dialog
+4. Choose forecast CSV file
+5. Select polygon layer (zones/neighborhoods)
+6. Select pipe layer
+7. Configure settings:
+   - Start year (e.g., 2025)
+   - Aggregation window (default: 5 years)
+8. Run assignment
+
+**What Happens**:
+- Pipes assigned to polygons by maximum overlap intersection
+- Loads calculated using 5-year windows:
+  - 2030 pipes: Sum of 2026-2030 increments
+  - 2035 pipes: Sum of 2031-2035 increments
+  - 2045 pipes: Sum of 2041-2045 increments
+- CSV cumulative totals converted to per-year increments (baseline year = 0)
+- All pipes updated with:
+  - **LOAD**: Load value (GJ/d)
+  - **DESC**: Polygon name + period description
+  - **PROP**: "Proposed" status
+  - **YEAR**: Construction year
+  - **DATETIME**: Human-readable date (1-Nov-YYYY)
+  - **SYN_DATE**: Synergi format date (YYYYMMDD)
+
+**Example Code**:
+```python
+from gas_hydraulics.load_assignment import LoadAssignmentTool
+
+tool = LoadAssignmentTool(iface)
+tool.run_load_assignment(
+    csv_file="load_forecast_2025.csv",
+    polygon_layer=zone_layer,
+    pipe_layer=pipe_layer,
+    start_year=2025,
+    aggregation_window=5
+)
+```
+
+**Important Notes**:
+- Pipes with no intersecting polygon receive "Unknown Area" description
+- Pipes with no forecast load still get year, polygon, and Prop="Proposed"
+- Priority zones with "Zero Priority" will not receive overflow loads
+- Excess demand deferred to future years rather than forced into restricted areas
 
 ## Understanding the Results
 

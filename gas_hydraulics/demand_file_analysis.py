@@ -247,15 +247,133 @@ class DemandFileAnalysisPlugin:
         df_res = df[df['Use Class'].str.contains('APT|RES', na=False)]
         df_ind = df[df['Use Class'].str.contains('IND', na=False)]
         df_comm = df[df['Use Class'].str.contains('COM', na=False)]
-        
         return {
             'residential': df_res,
             'industrial': df_ind,
             'commercial': df_comm
         }
 
+    def build_pipe_to_zone_mapping(self, zone_layer, pipe_layer):
+        """
+        Build a mapping of pipes to zones based on maximum overlap.
+        Each pipe is assigned to exactly one zone (the one it overlaps most with).
+        This prevents double counting when zones overlap or pipes cross zone boundaries.
+        
+        Args:
+            zone_layer: The zone layer
+            pipe_layer: The pipe layer
+            
+        Returns:
+            Tuple of (pipe_to_zone dict, zone_to_pipes dict)
+            - pipe_to_zone: Maps pipe_name -> zone_name
+            - zone_to_pipes: Maps zone_name -> set of pipe_names
+        """
+        try:
+            pipe_to_zone = {}  # Map pipe_name -> zone_name
+            all_pipes_checked = set()
+            
+            LOGGER.info("Building pipe-to-zone mapping (one pipe = one zone, based on maximum overlap)...")
+            
+            for pipe_feature in pipe_layer.getFeatures():
+                pipe_geom = pipe_feature.geometry()
+                if pipe_geom.isEmpty():
+                    continue
+                
+                # Get pipe name
+                pipe_name = None
+                possible_name_fields = ['FacNam1005', 'name', 'Name', 'NAME', 'pipe_name', 'Pipe_Name', 'PIPE_NAME']
+                for field_name in possible_name_fields:
+                    try:
+                        pipe_name = pipe_feature.attribute(field_name)
+                        if pipe_name is not None and str(pipe_name).strip():
+                            break
+                    except:
+                        continue
+                
+                if pipe_name is None:
+                    pipe_name = f"Pipe_{pipe_feature.id()}"
+                
+                pipe_name = str(pipe_name)
+                all_pipes_checked.add(pipe_name)
+                
+                # Find which zones this pipe intersects
+                max_overlap = 0
+                best_zone = None
+                zones_intersected = []
+                
+                for zone_feature in zone_layer.getFeatures():
+                    zone_geom = zone_feature.geometry()
+                    if zone_geom.isEmpty():
+                        continue
+                    
+                    # Get zone name
+                    zone_name = None
+                    possible_name_fields = ['Name', 'name', 'NAME', 'zone_name', 'Zone_Name', 'ZONE_NAME',
+                                          'zone', 'Zone', 'ZONE', 'area_name', 'Area_Name', 'AREA_NAME',
+                                          'id', 'ID', 'fid', 'FID', 'objectid', 'OBJECTID']
+                    for field_name in possible_name_fields:
+                        try:
+                            zone_name = zone_feature.attribute(field_name)
+                            if zone_name is not None and str(zone_name).strip():
+                                break
+                        except:
+                            continue
+                    
+                    if zone_name is None:
+                        zone_name = f"Zone_{zone_feature.id()}"
+                    
+                    # Check intersection
+                    if zone_geom.intersects(pipe_geom):
+                        zones_intersected.append(zone_name)
+                        # Calculate overlap (length of pipe within zone)
+                        try:
+                            intersection = zone_geom.intersection(pipe_geom)
+                            overlap = intersection.length() if not intersection.isEmpty() else 0
+                            
+                            if overlap > max_overlap:
+                                max_overlap = overlap
+                                best_zone = zone_name
+                        except:
+                            # If intersection calculation fails, just note that it intersects
+                            if best_zone is None:
+                                best_zone = zone_name
+                
+                # Assign pipe to the zone with maximum overlap
+                if best_zone is not None:
+                    pipe_to_zone[pipe_name] = best_zone
+                    # Log if pipe intersects multiple zones
+                    if len(zones_intersected) > 1:
+                        LOGGER.info(f"Pipe '{pipe_name}' intersects {len(zones_intersected)} zones: {zones_intersected}")
+                        LOGGER.info(f"  -> Assigned to '{best_zone}' (maximum overlap: {max_overlap:.2f})")
+            
+            # Build reverse mapping: zone -> pipes
+            zone_to_pipes = {}
+            for pipe_name, zone_name in pipe_to_zone.items():
+                if zone_name not in zone_to_pipes:
+                    zone_to_pipes[zone_name] = set()
+                zone_to_pipes[zone_name].add(pipe_name)
+            
+            LOGGER.info(f"Pipe-to-zone mapping complete:")
+            LOGGER.info(f"  Total pipes checked: {len(all_pipes_checked)}")
+            LOGGER.info(f"  Pipes assigned to zones: {len(pipe_to_zone)}")
+            LOGGER.info(f"  Pipes not assigned: {len(all_pipes_checked) - len(pipe_to_zone)}")
+            LOGGER.info(f"  Zones with pipes: {len(zone_to_pipes)}")
+            for zone_name, pipes in zone_to_pipes.items():
+                LOGGER.info(f"    {zone_name}: {len(pipes)} pipes")
+            
+            return pipe_to_zone, zone_to_pipes
+            
+        except Exception as e:
+            LOGGER.error(f"Error building pipe-to-zone mapping: {e}")
+            import traceback
+            LOGGER.error(f"Traceback: {traceback.format_exc()}")
+            return {}, {}
+
     def get_pipes_in_zone(self, zone_feature, pipe_layer, buffer_pixels: int = 10):
         """Find pipes that intersect with a zone polygon using a buffer.
+        
+        **DEPRECATED**: This method may double-count pipes if they intersect multiple zones.
+        Use build_pipe_to_zone_mapping() instead to prevent double counting.
         
         Args:
             zone_feature: Zone polygon feature
@@ -265,6 +383,9 @@ class DemandFileAnalysisPlugin:
         Returns:
             List of pipe names that intersect the zone
         """
+        LOGGER.warning("get_pipes_in_zone() is deprecated and may cause double counting.")
+        LOGGER.warning("Consider using build_pipe_to_zone_mapping() instead.")
+        
         try:
             # Check if we have QGIS available
             try:
@@ -534,9 +655,62 @@ class DemandFileAnalysisPlugin:
             LOGGER.info(f"Total calculated load: {total_load:.2f}")
             self.audit_results['processing_steps'].append(f"Calculated total load: {total_load:.2f}")
             
-            # Step 5: Filter by date
+            # Step 5: Filter by date and handle bad dates
             LOGGER.info("Step 5: Filtering by install date...")
             df['Install Date'] = pd.to_datetime(df['Install Date'], errors='coerce')
+            
+            # Separate records with valid vs invalid dates
+            valid_dates_mask = df['Install Date'].notna()
+            df_with_dates = df[valid_dates_mask].copy()
+            df_without_dates = df[~valid_dates_mask].copy()
+            
+            # Get date range from valid records
+            if len(df_with_dates) > 0:
+                min_year = df_with_dates['Install Date'].dt.year.min()
+                max_year = df_with_dates['Install Date'].dt.year.max()
+                year_span = max(1, max_year - min_year + 1)  # At least 1 year
+                
+                LOGGER.info(f"Valid date range: {min_year} to {max_year} ({year_span} years)")
+                
+                # For records with bad dates, distribute their load proportionally to valid date loads
+                if len(df_without_dates) > 0:
+                    bad_date_total_load = df_without_dates['Load'].sum()
+                    LOGGER.info(f"Found {len(df_without_dates)} records with bad dates, total load: {bad_date_total_load:.2f}")
+                    
+                    # Calculate load by year from valid dates
+                    df_with_dates_temp = df_with_dates.copy()
+                    df_with_dates_temp['Install Year'] = df_with_dates_temp['Install Date'].dt.year
+                    year_loads = df_with_dates_temp.groupby('Install Year')['Load'].sum()
+                    
+                    # Calculate total valid load
+                    total_valid_load = year_loads.sum()
+                    
+                    # Calculate proportion for each year (aggressive: proportional to valid load)
+                    year_proportions = year_loads / total_valid_load
+                    
+                    LOGGER.info(f"Distributing bad date loads proportionally to valid date loads:")
+                    for year, proportion in year_proportions.items():
+                        LOGGER.info(f"  Year {year}: {proportion*100:.1f}% (valid load: {year_loads[year]:.2f} GJ/d)")
+                    
+                    # Create records for each year with proportional load
+                    distributed_records = []
+                    for year, proportion in year_proportions.items():
+                        for idx, row in df_without_dates.iterrows():
+                            new_row = row.copy()
+                            new_row['Install Date'] = pd.to_datetime(f'{year}-01-01')
+                            new_row['Load'] = row['Load'] * proportion  # Distribute proportionally
+                            distributed_records.append(new_row)
+                    
+                    df_distributed = pd.DataFrame(distributed_records)
+                    df = pd.concat([df_with_dates, df_distributed], ignore_index=True)
+                    LOGGER.info(f"After distributing bad date loads: {len(df)} total records")
+                else:
+                    df = df_with_dates
+            else:
+                LOGGER.warning("No valid dates found in data")
+                df = df_with_dates  # Empty or all bad dates
+            
+            # Now filter by current year
             current_df = df[df['Install Date'].dt.year <= current_year]
             
             date_filtered_load = current_df['Load'].sum()
@@ -556,15 +730,15 @@ class DemandFileAnalysisPlugin:
             
             if zone_layer and pipe_layer:
                 LOGGER.info("Step 7: Processing spatial intersection...")
+                LOGGER.info("Using intersects with overlap-based assignment to prevent double counting...")
+                
+                # Build pipe-to-zone mapping once to prevent double counting
+                pipe_to_zone, zone_to_pipes = self.build_pipe_to_zone_mapping(zone_layer, pipe_layer)
                 
                 # Process each zone
-                zone_count = 0
                 for zone_feature in zone_layer.getFeatures():
-                    zone_count += 1
-                    
-                    # Try different field names for zone identification, prioritizing "Name" column
+                    # Get zone name
                     zone_name = None
-                    # Prioritize "Name" column variants, then fall back to other identifiers
                     possible_name_fields = ['Name', 'name', 'NAME', 'zone_name', 'Zone_Name', 'ZONE_NAME',
                                           'zone', 'Zone', 'ZONE', 'area_name', 'Area_Name', 'AREA_NAME',
                                           'id', 'ID', 'fid', 'FID', 'objectid', 'OBJECTID']
@@ -573,19 +747,16 @@ class DemandFileAnalysisPlugin:
                         try:
                             zone_name = zone_feature.attribute(field_name)
                             if zone_name is not None and str(zone_name).strip():
-                                LOGGER.info(f"Zone {zone_count}: Found name '{zone_name}' in field '{field_name}'")
                                 break
                         except:
                             continue
                     
                     if zone_name is None:
-                        zone_name = f"Zone_{zone_count}"
-                        LOGGER.warning(f"No name field found for zone {zone_count}, using '{zone_name}'")
+                        zone_name = f"Zone_{zone_feature.id()}"
                     
-                    # Find pipes in this zone
-                    LOGGER.info(f"Finding pipes in zone: {zone_name}")
-                    pipe_names = self.get_pipes_in_zone(zone_feature, pipe_layer)
-                    LOGGER.info(f"Zone {zone_name}: Found {len(pipe_names)} intersecting pipes")
+                    # Get pipes assigned to this zone (no double counting)
+                    pipe_names = list(zone_to_pipes.get(zone_name, set()))
+                    LOGGER.info(f"Zone {zone_name}: {len(pipe_names)} pipes (no double counting)")
                     
                     zone_detail = {
                         'name': zone_name,

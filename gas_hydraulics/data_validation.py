@@ -184,19 +184,36 @@ def validate_forecast_inputs(inputs):
             else:
                 validator.add_warning(f"Zone '{zone}' in current loads but not in ultimate loads")
     
-    # Check growth rates
+    # Check growth rates (only relevant for enhanced mode with regression)
+    # In basic mode, priority multipliers are used instead of growth rates
     growth_rates = inputs.get('growth_rates', {})
-    if not growth_rates:
-        validator.add_warning("No custom growth rates - will use defaults")
+    
+    # Only check growth rates if we have indicators this is enhanced/regression mode
+    # Enhanced mode would have population_layer, population_file, or aggregate_polygons
+    is_enhanced_mode = any([
+        inputs.get('population_layer'),
+        inputs.get('population_file'),
+        inputs.get('aggregate_polygons') is not None
+    ])
+    
+    if is_enhanced_mode:
+        # Enhanced mode: growth rates are relevant
+        if not growth_rates:
+            validator.add_info("No custom growth rates - will use regression-based forecasting")
+        else:
+            validator.add_info(f"Custom growth rates: {len(growth_rates)} zones")
+            
+            for zone, rate in growth_rates.items():
+                rate_val = safe_float(rate)
+                if rate_val < 0:
+                    validator.add_warning(f"Zone '{zone}' has negative growth rate: {rate_val}%")
+                elif rate_val > 20:
+                    validator.add_warning(f"Zone '{zone}' has very high growth rate: {rate_val}%")
     else:
-        validator.add_info(f"Custom growth rates: {len(growth_rates)} zones")
-        
-        for zone, rate in growth_rates.items():
-            rate_val = safe_float(rate)
-            if rate_val < 0:
-                validator.add_warning(f"Zone '{zone}' has negative growth rate: {rate_val}%")
-            elif rate_val > 20:
-                validator.add_warning(f"Zone '{zone}' has very high growth rate: {rate_val}%")
+        # Basic mode: growth rates not used (priority multipliers used instead)
+        if growth_rates:
+            validator.add_info(f"Note: Custom growth rates ignored in basic mode (uses priority multipliers)")
+        # No warning if no growth rates in basic mode - this is expected
     
     # Check zone name consistency
     current_zones = set(current_loads.keys())

@@ -30,6 +30,25 @@ class GasHydraulicsPlugin:
         self.historical_analysis = None
         self.forecast_plugin = None
         self.pipe_to_node_converter = None
+        
+        # Check optional dependencies
+        self.has_geopandas = self._check_geopandas()
+        
+    def _check_geopandas(self) -> bool:
+        """Check if GeoPandas is available.
+        
+        Returns:
+            bool: True if GeoPandas is installed, False otherwise
+        """
+        try:
+            import geopandas
+            import pandas
+            LOGGER.info("✓ GeoPandas detected - Synergi export will work")
+            return True
+        except ImportError:
+            LOGGER.warning("⚠ GeoPandas not detected - Synergi export will require manual fix")
+            LOGGER.warning("  Install with: pip install geopandas (from OSGeo4W Shell)")
+            return False
 
     def initGui(self):
         """Create GUI elements (only when running inside QGIS)."""
@@ -77,6 +96,15 @@ class GasHydraulicsPlugin:
                     
                 # Also add to toolbar for easy access
                 self.iface.addToolBarIcon(main_action)
+                
+                # Show warning if GeoPandas is not available (only once at startup)
+                if not self.has_geopandas:
+                    from qgis.PyQt.QtWidgets import QMessageBox
+                    self.iface.messageBar().pushWarning(
+                        "Gas Hydraulics Plugin",
+                        "GeoPandas not detected. Synergi export in Load Assignment will require manual fix. "
+                        "See plugin log for installation instructions."
+                    )
 
         except Exception as e:
             LOGGER.debug(f"QGIS not available; skipping GUI setup: {e}")

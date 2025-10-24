@@ -63,6 +63,307 @@ class HistoricalAnalysisPlugin:
         except Exception:
             LOGGER.debug("QGIS not available; skipping unload")
 
+    def create_historical_load_plots(self, excel_file_path: str, zone_layer: Any = None,
+                                    pipe_layer: Any = None, start_year: int = 2000,
+                                    end_year: int = 2025, output_dir: str = None):
+        """Create plots showing historical loads by category for each area.
+        
+        Creates one plot per area showing residential (blue), commercial (red), 
+        and industrial (purple) loads over time, with average growth rates for 
+        the last 5 years displayed on each plot.
+        
+        Args:
+            excel_file_path: Path to Excel file with service point data
+            zone_layer: QGIS layer with zone polygons
+            pipe_layer: QGIS layer with pipe lines
+            start_year: Start year for analysis
+            end_year: End year for analysis
+            output_dir: Directory to save plots (if None, prompts user)
+        """
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend for file output
+            
+            LOGGER.info("Creating historical load plots...")
+            
+            # Load and process Excel data
+            # Try to read 'Service Point List' sheet first, fall back to first sheet
+            try:
+                df = pd.read_excel(excel_file_path, sheet_name='Service Point List')
+                LOGGER.info("Reading from 'Service Point List' sheet")
+            except:
+                df = pd.read_excel(excel_file_path)
+                LOGGER.info("Reading from default sheet")
+            
+            LOGGER.info(f"Loaded Excel file: {len(df)} rows")
+            
+            if df.empty:
+                LOGGER.error("Excel file is empty")
+                return False
+            
+            # Calculate loads
+            df = self.calculate_load(df)
+            
+            # Convert Install Date and handle bad dates
+            df['Install Date'] = pd.to_datetime(df['Install Date'], errors='coerce')
+            
+            # Separate records with valid vs invalid dates
+            valid_dates_mask = df['Install Date'].notna()
+            df_with_dates = df[valid_dates_mask].copy()
+            df_without_dates = df[~valid_dates_mask].copy()
+            
+            # For rows with invalid/missing dates, distribute their load proportionally to valid date loads
+            if len(df_without_dates) > 0:
+                bad_date_total_load = df_without_dates['Load'].sum()
+                LOGGER.info(f"Found {len(df_without_dates)} records with bad dates, total load: {bad_date_total_load:.2f}")
+                
+                # Extract year from valid dates and calculate load by year
+                df_with_dates['Install Year'] = df_with_dates['Install Date'].dt.year
+                year_loads_all = df_with_dates.groupby('Install Year')['Load'].sum()
+                
+                LOGGER.info(f"Valid date range: {year_loads_all.index.min()} to {year_loads_all.index.max()}")
+                
+                # Filter to analysis period only for distribution (but calculate proportions from ALL years with data)
+                year_loads = year_loads_all[(year_loads_all.index >= start_year) & (year_loads_all.index <= end_year)]
+                
+                if len(year_loads) == 0:
+                    LOGGER.warning("No valid dates in analysis period - cannot distribute bad date loads")
+                    df = df_with_dates
+                else:
+                    # Calculate total valid load in period
+                    total_valid_load = year_loads.sum()
+                    
+                    # Calculate proportion for each year (aggressive: proportional to valid load)
+                    year_proportions = year_loads / total_valid_load
+                    
+                    LOGGER.info(f"Distributing bad date loads proportionally to valid date loads in analysis period {start_year}-{end_year}:")
+                    for year, proportion in year_proportions.items():
+                        LOGGER.info(f"  Year {year}: {proportion*100:.1f}% (valid load: {year_loads[year]:.2f} GJ/d)")
+                    
+                    # Create records for each year with proportional load
+                    distributed_records = []
+                    for year, proportion in year_proportions.items():
+                        for idx, row in df_without_dates.iterrows():
+                            new_row = row.copy()
+                            new_row['Install Date'] = pd.to_datetime(f'{year}-01-01')
+                            new_row['Load'] = row['Load'] * proportion  # Distribute proportionally
+                            distributed_records.append(new_row)
+                    
+                    df_distributed = pd.DataFrame(distributed_records)
+                    df = pd.concat([df_with_dates, df_distributed], ignore_index=True)
+                    LOGGER.info(f"After distributing bad date loads: {len(df)} total records")
+            else:
+                df = df_with_dates
+            
+            df['Install Year'] = df['Install Date'].dt.year
+            
+            # Include all service points installed up to end_year (not just between start_year and end_year)
+            # For cumulative load calculations, we need ALL installations up to end_year
+            period_df = df[df['Install Year'] <= end_year]
+            LOGGER.info(f"Filtered to installations <= {end_year}: {len(period_df)} rows, {period_df['Load'].sum():.2f} GJ/d")
+            
+            if period_df.empty:
+                LOGGER.error("No data in analysis period")
+                return False
+            
+            # Filter by use class
+            class_dfs = self.filter_by_use_class(period_df)
+            
+            # Get output directory if not provided
+            if not output_dir:
+                if self.iface:
+                    from qgis.PyQt.QtWidgets import QFileDialog
+                    output_dir = QFileDialog.getExistingDirectory(
+                        self.iface.mainWindow(),
+                        "Select Directory for Plots",
+                        "",
+                        QFileDialog.ShowDirsOnly
+                    )
+                    if not output_dir:
+                        LOGGER.info("User cancelled plot creation")
+                        return False
+                else:
+                    output_dir = "."
+            
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Collect data by zone
+            zone_data = {}
+            
+            if zone_layer and pipe_layer:
+                LOGGER.info("Processing zones for plot creation...")
+                
+                # Build pipe-to-zone mapping once to prevent double counting
+                pipe_to_zone, zone_to_pipes = self.build_pipe_to_zone_mapping(zone_layer, pipe_layer)
+                
+                for zone_feature in zone_layer.getFeatures():
+                    zone_name = self._get_zone_name(zone_feature)
+                    pipe_names = list(zone_to_pipes.get(zone_name, set()))
+                    
+                    if not pipe_names:
+                        LOGGER.warning(f"No pipes assigned to zone {zone_name}, skipping")
+                        continue
+                    
+                    LOGGER.info(f"Zone {zone_name}: {len(pipe_names)} pipes (no double counting)")
+                    
+                    # Initialize data structure for this zone
+                    zone_data[zone_name] = {
+                        'years': list(range(start_year, end_year + 1)),
+                        'residential': [],
+                        'commercial': [],
+                        'industrial': []
+                    }
+                    
+                    # Calculate cumulative load for each year and category
+                    for year in range(start_year, end_year + 1):
+                        for class_name in ['residential', 'commercial', 'industrial']:
+                            class_df = class_dfs[class_name]
+                            zone_year_df = class_df[
+                                (class_df['Distribution Pipe'].isin(pipe_names)) &
+                                (class_df['Install Year'] <= year)
+                            ]
+                            cumulative_load = zone_year_df['Load'].sum()
+                            zone_data[zone_name][class_name].append(cumulative_load)
+            else:
+                LOGGER.info("No spatial layers - creating overall plot")
+                zone_name = "Overall"
+                zone_data[zone_name] = {
+                    'years': list(range(start_year, end_year + 1)),
+                    'residential': [],
+                    'commercial': [],
+                    'industrial': []
+                }
+                
+                for year in range(start_year, end_year + 1):
+                    for class_name in ['residential', 'commercial', 'industrial']:
+                        class_df = class_dfs[class_name]
+                        year_df = class_df[class_df['Install Year'] <= year]
+                        cumulative_load = year_df['Load'].sum()
+                        zone_data[zone_name][class_name].append(cumulative_load)
+            
+            # Create plots
+            plots_created = 0
+            for zone_name, data in zone_data.items():
+                try:
+                    # Calculate average load growth for last 5 years for each category (raw GJ/d per year)
+                    growth_rates = {}
+                    for category in ['residential', 'commercial', 'industrial']:
+                        loads = data[category]
+                        if len(loads) >= 6:  # Need at least 6 years to calculate 5-year growth
+                            last_5_years = loads[-6:]  # Last 6 values (to calculate 5 differences)
+                            # Calculate year-over-year load increases
+                            yearly_growth = []
+                            for i in range(1, len(last_5_years)):
+                                growth = last_5_years[i] - last_5_years[i-1]  # Raw load increase
+                                yearly_growth.append(growth)
+                            avg_growth = sum(yearly_growth) / len(yearly_growth) if yearly_growth else 0
+                        else:
+                            avg_growth = 0
+                        growth_rates[category] = avg_growth
+                    
+                    # Create figure
+                    fig, ax = plt.subplots(figsize=(12, 7))
+                    
+                    # Plot each category
+                    ax.plot(data['years'], data['residential'], 
+                           color='blue', linewidth=2.5, marker='o', 
+                           markersize=4, label='Residential')
+                    ax.plot(data['years'], data['commercial'], 
+                           color='red', linewidth=2.5, marker='s', 
+                           markersize=4, label='Commercial')
+                    ax.plot(data['years'], data['industrial'], 
+                           color='purple', linewidth=2.5, marker='^', 
+                           markersize=4, label='Industrial')
+                    
+                    # Formatting
+                    ax.set_xlabel('Year', fontsize=12, fontweight='bold')
+                    ax.set_ylabel('Cumulative Load (GJ/d)', fontsize=12, fontweight='bold')
+                    ax.set_title(f'Historical Load Analysis - {zone_name}', 
+                                fontsize=14, fontweight='bold', pad=20)
+                    ax.grid(True, alpha=0.3, linestyle='--')
+                    ax.legend(loc='upper left', fontsize=10, framealpha=0.9)
+                    
+                    # Add growth rate annotations
+                    annotation_text = 'Average Load Growth (Last 5 Years):\n'
+                    annotation_text += f"Residential: {growth_rates['residential']:.2f} GJ/d per year\n"
+                    annotation_text += f"Commercial: {growth_rates['commercial']:.2f} GJ/d per year\n"
+                    annotation_text += f"Industrial: {growth_rates['industrial']:.2f} GJ/d per year"
+                    
+                    # Place annotation in upper right
+                    ax.text(0.98, 0.97, annotation_text,
+                           transform=ax.transAxes,
+                           fontsize=9,
+                           verticalalignment='top',
+                           horizontalalignment='right',
+                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+                    
+                    # Tight layout
+                    plt.tight_layout()
+                    
+                    # Save plot
+                    safe_zone_name = "".join(c for c in zone_name if c.isalnum() or c in (' ', '_', '-')).strip()
+                    safe_zone_name = safe_zone_name.replace(' ', '_')
+                    output_path = os.path.join(output_dir, f'historical_loads_{safe_zone_name}.png')
+                    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+                    plt.close(fig)
+                    
+                    plots_created += 1
+                    LOGGER.info(f"Created plot for {zone_name}: {output_path}")
+                    
+                except Exception as e:
+                    LOGGER.error(f"Error creating plot for {zone_name}: {e}")
+                    import traceback
+                    LOGGER.error(traceback.format_exc())
+            
+            # Show success message
+            if plots_created > 0 and self.iface:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self.iface.mainWindow(),
+                    "Plots Created",
+                    f"Successfully created {plots_created} historical load plot(s) in:\n{output_dir}"
+                )
+                LOGGER.info(f"Successfully created {plots_created} plots")
+                return True
+            elif plots_created > 0:
+                LOGGER.info(f"Successfully created {plots_created} plots in {output_dir}")
+                return True
+            else:
+                if self.iface:
+                    from qgis.PyQt.QtWidgets import QMessageBox
+                    QMessageBox.warning(
+                        self.iface.mainWindow(),
+                        "No Plots Created",
+                        "No plots were created. Check the log for details."
+                    )
+                return False
+                
+        except ImportError as e:
+            LOGGER.error(f"matplotlib not available: {e}")
+            if self.iface:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self.iface.mainWindow(),
+                    "Missing Dependency",
+                    "matplotlib is required for plotting but not installed.\n\n"
+                    "Install it with: pip install matplotlib"
+                )
+            return False
+        except Exception as e:
+            LOGGER.error(f"Error creating plots: {e}")
+            import traceback
+            LOGGER.error(traceback.format_exc())
+            if self.iface:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self.iface.mainWindow(),
+                    "Plot Creation Error",
+                    f"Failed to create plots:\n{str(e)}"
+                )
+            return False
+
     def export_table_to_csv(self, table, default_filename="table_export"):
         """Export QTableWidget contents to CSV file."""
         try:
@@ -191,7 +492,14 @@ class HistoricalAnalysisPlugin:
             LOGGER.info(f"Starting detailed CSV export for {start_year}-{end_year}")
             
             # Load and process Excel data
-            df = pd.read_excel(excel_file_path)
+            # Try to read 'Service Point List' sheet first, fall back to first sheet
+            try:
+                df = pd.read_excel(excel_file_path, sheet_name='Service Point List')
+                LOGGER.info("Reading from 'Service Point List' sheet")
+            except:
+                df = pd.read_excel(excel_file_path)
+                LOGGER.info("Reading from default sheet")
+            
             original_count = len(df)
             LOGGER.info(f"Loaded Excel file: {original_count} rows")
             
@@ -203,14 +511,64 @@ class HistoricalAnalysisPlugin:
             df = self.calculate_load(df)
             LOGGER.info(f"Calculated loads for {len(df)} service points")
             
-            # Convert Install Date and filter by years
+            # Convert Install Date and handle bad dates
             df['Install Date'] = pd.to_datetime(df['Install Date'], errors='coerce')
-            df = df.dropna(subset=['Install Date'])
+            
+            # Separate records with valid vs invalid dates
+            valid_dates_mask = df['Install Date'].notna()
+            df_with_dates = df[valid_dates_mask].copy()
+            df_without_dates = df[~valid_dates_mask].copy()
+            
+            # For rows with invalid/missing dates, distribute their load proportionally to valid date loads
+            if len(df_without_dates) > 0:
+                bad_date_total_load = df_without_dates['Load'].sum()
+                LOGGER.info(f"Found {len(df_without_dates)} records with bad dates, total load: {bad_date_total_load:.2f}")
+                
+                # Extract year from valid dates and calculate load by year
+                df_with_dates_temp = df_with_dates.copy()
+                df_with_dates_temp['Install Year'] = df_with_dates_temp['Install Date'].dt.year
+                year_loads_all = df_with_dates_temp.groupby('Install Year')['Load'].sum()
+                
+                LOGGER.info(f"Valid date range: {year_loads_all.index.min()} to {year_loads_all.index.max()}")
+                
+                # Filter to analysis period only for distribution
+                year_loads = year_loads_all[(year_loads_all.index >= start_year) & (year_loads_all.index <= end_year)]
+                
+                if len(year_loads) == 0:
+                    LOGGER.warning("No valid dates in analysis period - cannot distribute bad date loads")
+                    df = df_with_dates
+                else:
+                    # Calculate total valid load in period
+                    total_valid_load = year_loads.sum()
+                    
+                    # Calculate proportion for each year (aggressive: proportional to valid load)
+                    year_proportions = year_loads / total_valid_load
+                    
+                    LOGGER.info(f"Distributing bad date loads proportionally to valid date loads in analysis period {start_year}-{end_year}:")
+                    for year, proportion in year_proportions.items():
+                        LOGGER.info(f"  Year {year}: {proportion*100:.1f}% (valid load: {year_loads[year]:.2f} GJ/d)")
+                    
+                    # Create records for each year with proportional load
+                    distributed_records = []
+                    for year, proportion in year_proportions.items():
+                        for idx, row in df_without_dates.iterrows():
+                            new_row = row.copy()
+                            new_row['Install Date'] = pd.to_datetime(f'{year}-01-01')
+                            new_row['Load'] = row['Load'] * proportion  # Distribute proportionally
+                            distributed_records.append(new_row)
+                    
+                    df_distributed = pd.DataFrame(distributed_records)
+                    df = pd.concat([df_with_dates, df_distributed], ignore_index=True)
+                    LOGGER.info(f"After distributing bad date loads: {len(df)} total records")
+            else:
+                df = df_with_dates
+            
             df['Install Year'] = df['Install Date'].dt.year
             
-            # Filter to analysis period
-            period_df = df[(df['Install Year'] >= start_year) & (df['Install Year'] <= end_year)]
-            LOGGER.info(f"Filtered to analysis period: {len(period_df)} rows")
+            # Filter to end year only (include all installations up to end_year, regardless of start_year)
+            # For cumulative loads, we need all service points installed before end_year
+            period_df = df[df['Install Year'] <= end_year]
+            LOGGER.info(f"Filtered to installations <= {end_year}: {len(period_df)} rows, {period_df['Load'].sum():.2f} GJ/d")
             
             if period_df.empty:
                 LOGGER.error("No data in analysis period")
@@ -224,14 +582,79 @@ class HistoricalAnalysisPlugin:
             
             if zone_layer and pipe_layer:
                 LOGGER.info("Processing zones for detailed CSV export...")
+                LOGGER.info("Using intersects with overlap-based assignment to prevent double counting...")
+                
+                # First pass: assign each pipe to the zone it overlaps most with
+                pipe_to_zone = {}  # Map pipe_name -> zone_name
+                all_pipes_checked = set()
+                
+                for pipe_feature in pipe_layer.getFeatures():
+                    pipe_geom = pipe_feature.geometry()
+                    if pipe_geom.isEmpty():
+                        continue
+                    
+                    # Get pipe name
+                    pipe_name = None
+                    possible_name_fields = ['FacNam1005', 'name', 'Name', 'NAME', 'pipe_name', 'Pipe_Name']
+                    for field_name in possible_name_fields:
+                        try:
+                            pipe_name = pipe_feature.attribute(field_name)
+                            if pipe_name is not None and str(pipe_name).strip():
+                                break
+                        except:
+                            continue
+                    
+                    if pipe_name is None:
+                        pipe_name = f"Pipe_{pipe_feature.id()}"
+                    
+                    pipe_name = str(pipe_name)
+                    all_pipes_checked.add(pipe_name)
+                    
+                    # Find which zones this pipe intersects
+                    max_overlap = 0
+                    best_zone = None
+                    
+                    for zone_feature in zone_layer.getFeatures():
+                        zone_geom = zone_feature.geometry()
+                        if zone_geom.isEmpty():
+                            continue
+                        
+                        # Check intersection
+                        if zone_geom.intersects(pipe_geom):
+                            # Calculate overlap (length of pipe within zone)
+                            try:
+                                intersection = zone_geom.intersection(pipe_geom)
+                                overlap = intersection.length() if not intersection.isEmpty() else 0
+                                
+                                if overlap > max_overlap:
+                                    max_overlap = overlap
+                                    best_zone = self._get_zone_name(zone_feature)
+                            except:
+                                # If intersection fails, just note that it intersects
+                                if best_zone is None:
+                                    best_zone = self._get_zone_name(zone_feature)
+                    
+                    # Assign pipe to the zone with maximum overlap
+                    if best_zone is not None:
+                        pipe_to_zone[pipe_name] = best_zone
+                
+                LOGGER.info(f"Pipe-to-zone assignment complete:")
+                LOGGER.info(f"  Total pipes checked: {len(all_pipes_checked)}")
+                LOGGER.info(f"  Pipes assigned to zones: {len(pipe_to_zone)}")
+                LOGGER.info(f"  Pipes not assigned: {len(all_pipes_checked) - len(pipe_to_zone)}")
+                
+                # Second pass: aggregate loads by zone
+                zone_pipes = {}  # Map zone_name -> set of pipe names
+                for pipe_name, zone_name in pipe_to_zone.items():
+                    if zone_name not in zone_pipes:
+                        zone_pipes[zone_name] = set()
+                    zone_pipes[zone_name].add(pipe_name)
                 
                 for zone_feature in zone_layer.getFeatures():
                     # Get zone name
                     zone_name = self._get_zone_name(zone_feature)
-                    
-                    # Find pipes in this zone
-                    pipe_names = self.get_pipes_in_zone(zone_feature, pipe_layer)
-                    LOGGER.info(f"Zone {zone_name}: Found {len(pipe_names)} pipes")
+                    pipe_names = zone_pipes.get(zone_name, set())
+                    LOGGER.info(f"Zone {zone_name}: Assigned {len(pipe_names)} pipes (no double counting)")
                     
                     # Process each year and class combination
                     for year in range(start_year, end_year + 1):
@@ -295,8 +718,36 @@ class HistoricalAnalysisPlugin:
                 csv_path = f"historical_analysis_{start_year}_{end_year}.csv"
             
             if csv_path:
+                # Export detailed CSV
                 results_df.to_csv(csv_path, index=False)
                 LOGGER.info(f"Exported detailed CSV to: {csv_path}")
+                
+                # Create basic forecasting format CSV (current year loads by zone)
+                # Format: Zone, Residential, Commercial, Industrial
+                basic_forecast_path = csv_path.replace('.csv', '_basic_forecast_format.csv')
+                
+                # Get the most recent year's loads
+                latest_year = end_year
+                latest_year_data = results_df[results_df['Year'] == latest_year]
+                
+                # Pivot to get one row per zone with columns for each category
+                basic_df_data = []
+                for polygon in latest_year_data['Polygon'].unique():
+                    polygon_data = latest_year_data[latest_year_data['Polygon'] == polygon]
+                    
+                    row = {'Zone': polygon}
+                    for category in ['Residential', 'Commercial', 'Industrial']:
+                        category_data = polygon_data[polygon_data['Category'] == category]
+                        load = category_data['Cumulative_Load_GJ'].values[0] if len(category_data) > 0 else 0.0
+                        row[category] = round(load, 2)
+                    
+                    basic_df_data.append(row)
+                
+                basic_df = pd.DataFrame(basic_df_data)
+                basic_df.to_csv(basic_forecast_path, index=False)
+                LOGGER.info(f"Exported basic forecast format CSV to: {basic_forecast_path}")
+                LOGGER.info(f"  Format: Zone, Residential, Commercial, Industrial (current year {latest_year} loads)")
+                
                 return csv_path
             
             return ""
@@ -375,10 +826,54 @@ class HistoricalAnalysisPlugin:
                 LOGGER.error("No valid install dates found - all data would be dropped")
                 return {}
             
-            # Only drop if we have some valid dates
-            if invalid_dates > 0:
-                LOGGER.warning(f"Dropping {invalid_dates} rows with invalid install dates")
-                df = df.dropna(subset=['Install Date'])
+            # Separate records with valid vs invalid dates
+            valid_dates_mask = df['Install Date'].notna()
+            df_with_dates = df[valid_dates_mask].copy()
+            df_without_dates = df[~valid_dates_mask].copy()
+            
+            # For rows with invalid/missing dates, distribute their load proportionally to valid date loads
+            if len(df_without_dates) > 0:
+                bad_date_total_load = df_without_dates['Load'].sum()
+                LOGGER.info(f"Found {len(df_without_dates)} records with bad dates, total load: {bad_date_total_load:.2f}")
+                
+                # Extract year from valid dates and calculate load by year
+                df_with_dates_temp = df_with_dates.copy()
+                df_with_dates_temp['Install Year'] = df_with_dates_temp['Install Date'].dt.year
+                year_loads_all = df_with_dates_temp.groupby('Install Year')['Load'].sum()
+                
+                LOGGER.info(f"Valid date range: {year_loads_all.index.min()} to {year_loads_all.index.max()}")
+                
+                # Filter to analysis period only for distribution
+                year_loads = year_loads_all[(year_loads_all.index >= start_year) & (year_loads_all.index <= end_year)]
+                
+                if len(year_loads) == 0:
+                    LOGGER.warning("No valid dates in analysis period - cannot distribute bad date loads")
+                    df = df_with_dates
+                else:
+                    # Calculate total valid load in period
+                    total_valid_load = year_loads.sum()
+                    
+                    # Calculate proportion for each year (aggressive: proportional to valid load)
+                    year_proportions = year_loads / total_valid_load
+                    
+                    LOGGER.info(f"Distributing bad date loads proportionally to valid date loads in analysis period {start_year}-{end_year}:")
+                    for year, proportion in year_proportions.items():
+                        LOGGER.info(f"  Year {year}: {proportion*100:.1f}% (valid load: {year_loads[year]:.2f} GJ/d)")
+                    
+                    # Create records for each year with proportional load
+                    distributed_records = []
+                    for year, proportion in year_proportions.items():
+                        for idx, row in df_without_dates.iterrows():
+                            new_row = row.copy()
+                            new_row['Install Date'] = pd.to_datetime(f'{year}-01-01')
+                            new_row['Load'] = row['Load'] * proportion  # Distribute proportionally
+                            distributed_records.append(new_row)
+                    
+                    df_distributed = pd.DataFrame(distributed_records)
+                    df = pd.concat([df_with_dates, df_distributed], ignore_index=True)
+                    LOGGER.info(f"After distributing bad date loads: {len(df)} total records")
+            else:
+                df = df_with_dates
             
             df['Install Year'] = df['Install Date'].dt.year
             
@@ -387,12 +882,13 @@ class HistoricalAnalysisPlugin:
             max_year = df['Install Year'].max()
             LOGGER.info(f"Data date range: {min_year} to {max_year}")
             
-            # Filter to analysis period
-            period_df = df[(df['Install Year'] >= start_year) & (df['Install Year'] <= end_year)]
-            LOGGER.info(f"After period filter ({start_year}-{end_year}): {len(period_df)} points")
+            # Include all service points installed up to end_year for cumulative calculations
+            # We still generate periods between start_year and end_year, but include ALL installations
+            period_df = df[df['Install Year'] <= end_year]
+            LOGGER.info(f"Filtered to installations <= {end_year}: {len(period_df)} points, {period_df['Load'].sum():.2f} GJ/d")
             
             if period_df.empty:
-                LOGGER.error(f"No data found in analysis period {start_year}-{end_year}")
+                LOGGER.error(f"No data found with installations <= {end_year}")
                 LOGGER.info(f"Available data spans {min_year}-{max_year}")
                 return {}
             
@@ -420,33 +916,15 @@ class HistoricalAnalysisPlugin:
                 
                 if zone_layer and pipe_layer:
                     LOGGER.info("Processing spatial zones...")
-                    zone_count = 0
+                    
+                    # Build pipe-to-zone mapping once to prevent double counting
+                    pipe_to_zone, zone_to_pipes = self.build_pipe_to_zone_mapping(zone_layer, pipe_layer)
+                    
                     # Process each zone
                     for zone_feature in zone_layer.getFeatures():
-                        zone_count += 1
-                        
-                        # Try different field names for zone identification, prioritizing "Name" column
-                        zone_name = None
-                        # Prioritize "Name" column variants, then fall back to other identifiers
-                        possible_name_fields = ['Name', 'name', 'NAME', 'zone_name', 'Zone_Name', 'ZONE_NAME',
-                                              'zone', 'Zone', 'ZONE', 'area_name', 'Area_Name', 'AREA_NAME',
-                                              'id', 'ID', 'fid', 'FID', 'objectid', 'OBJECTID']
-                        
-                        for field_name in possible_name_fields:
-                            try:
-                                zone_name = zone_feature.attribute(field_name)
-                                if zone_name is not None and str(zone_name).strip():
-                                    LOGGER.info(f"Found zone name '{zone_name}' in field '{field_name}'")
-                                    break
-                            except:
-                                continue
-                        
-                        if zone_name is None:
-                            zone_name = f"Zone_{zone_count}"
-                        
-                        # Find pipes in this zone
-                        pipe_names = self.get_pipes_in_zone(zone_feature, pipe_layer)
-                        LOGGER.info(f"Zone {zone_name}: Found {len(pipe_names)} pipes")
+                        zone_name = self._get_zone_name(zone_feature)
+                        pipe_names = list(zone_to_pipes.get(zone_name, set()))
+                        LOGGER.info(f"Zone {zone_name}: {len(pipe_names)} pipes (no double counting)")
                         
                         # Calculate cumulative loads by class for this zone up to period end
                         zone_class_loads = {}
@@ -487,8 +965,113 @@ class HistoricalAnalysisPlugin:
             LOGGER.error(f"Traceback: {traceback.format_exc()}")
             return {}
 
+    def build_pipe_to_zone_mapping(self, zone_layer, pipe_layer):
+        """
+        Build a mapping of pipes to zones based on maximum overlap.
+        Each pipe is assigned to exactly one zone (the one it overlaps most with).
+        This prevents double counting when zones overlap or pipes cross zone boundaries.
+        
+        Args:
+            zone_layer: The zone layer
+            pipe_layer: The pipe layer
+            
+        Returns:
+            Tuple of (pipe_to_zone dict, zone_to_pipes dict)
+            - pipe_to_zone: Maps pipe_name -> zone_name
+            - zone_to_pipes: Maps zone_name -> set of pipe_names
+        """
+        try:
+            pipe_to_zone = {}  # Map pipe_name -> zone_name
+            all_pipes_checked = set()
+            
+            LOGGER.info("Building pipe-to-zone mapping (one pipe = one zone, based on maximum overlap)...")
+            
+            for pipe_feature in pipe_layer.getFeatures():
+                pipe_geom = pipe_feature.geometry()
+                if pipe_geom.isEmpty():
+                    continue
+                
+                # Get pipe name
+                pipe_name = None
+                possible_name_fields = ['FacNam1005', 'name', 'Name', 'NAME', 'pipe_name', 'Pipe_Name', 'PIPE_NAME']
+                for field_name in possible_name_fields:
+                    try:
+                        pipe_name = pipe_feature.attribute(field_name)
+                        if pipe_name is not None and str(pipe_name).strip():
+                            break
+                    except:
+                        continue
+                
+                if pipe_name is None:
+                    pipe_name = f"Pipe_{pipe_feature.id()}"
+                
+                pipe_name = str(pipe_name)
+                all_pipes_checked.add(pipe_name)
+                
+                # Find which zones this pipe intersects
+                max_overlap = 0
+                best_zone = None
+                zones_intersected = []
+                
+                for zone_feature in zone_layer.getFeatures():
+                    zone_geom = zone_feature.geometry()
+                    if zone_geom.isEmpty():
+                        continue
+                    
+                    zone_name = self._get_zone_name(zone_feature)
+                    
+                    # Check intersection
+                    if zone_geom.intersects(pipe_geom):
+                        zones_intersected.append(zone_name)
+                        # Calculate overlap (length of pipe within zone)
+                        try:
+                            intersection = zone_geom.intersection(pipe_geom)
+                            overlap = intersection.length() if not intersection.isEmpty() else 0
+                            
+                            if overlap > max_overlap:
+                                max_overlap = overlap
+                                best_zone = zone_name
+                        except:
+                            # If intersection calculation fails, just note that it intersects
+                            if best_zone is None:
+                                best_zone = zone_name
+                
+                # Assign pipe to the zone with maximum overlap
+                if best_zone is not None:
+                    pipe_to_zone[pipe_name] = best_zone
+                    # Log if pipe intersects multiple zones
+                    if len(zones_intersected) > 1:
+                        LOGGER.info(f"Pipe '{pipe_name}' intersects {len(zones_intersected)} zones: {zones_intersected}")
+                        LOGGER.info(f"  -> Assigned to '{best_zone}' (maximum overlap: {max_overlap:.2f})")
+            
+            # Build reverse mapping: zone -> pipes
+            zone_to_pipes = {}
+            for pipe_name, zone_name in pipe_to_zone.items():
+                if zone_name not in zone_to_pipes:
+                    zone_to_pipes[zone_name] = set()
+                zone_to_pipes[zone_name].add(pipe_name)
+            
+            LOGGER.info(f"Pipe-to-zone mapping complete:")
+            LOGGER.info(f"  Total pipes checked: {len(all_pipes_checked)}")
+            LOGGER.info(f"  Pipes assigned to zones: {len(pipe_to_zone)}")
+            LOGGER.info(f"  Pipes not assigned: {len(all_pipes_checked) - len(pipe_to_zone)}")
+            LOGGER.info(f"  Zones with pipes: {len(zone_to_pipes)}")
+            for zone_name, pipes in zone_to_pipes.items():
+                LOGGER.info(f"    {zone_name}: {len(pipes)} pipes")
+            
+            return pipe_to_zone, zone_to_pipes
+            
+        except Exception as e:
+            LOGGER.error(f"Error building pipe-to-zone mapping: {e}")
+            import traceback
+            LOGGER.error(f"Traceback: {traceback.format_exc()}")
+            return {}, {}
+    
     def get_pipes_in_zone(self, zone_feature, pipe_layer, buffer_pixels: int = 10):
         """Find pipes that intersect with a zone polygon using a buffer.
+        
+        **DEPRECATED**: This method may double-count pipes if they intersect multiple zones.
+        Use build_pipe_to_zone_mapping() instead to prevent double counting.
         
         Args:
             zone_feature: Zone polygon feature
@@ -498,6 +1081,9 @@ class HistoricalAnalysisPlugin:
         Returns:
             List of pipe names that intersect the zone
         """
+        LOGGER.warning("get_pipes_in_zone() is deprecated and may cause double counting.")
+        LOGGER.warning("Consider using build_pipe_to_zone_mapping() instead.")
+        
         try:
             # Check if we have QGIS available
             try:
@@ -683,11 +1269,14 @@ class HistoricalAnalysisPlugin:
                     
                     if csv_path:
                         from qgis.PyQt.QtWidgets import QMessageBox
+                        basic_forecast_path = csv_path.replace('.csv', '_basic_forecast_format.csv')
                         QMessageBox.information(
                             self.iface.mainWindow(),
                             "CSV Export Complete",
                             f"Detailed historical analysis exported to:\n{csv_path}\n\n"
-                            f"The CSV contains load data by polygon, category, and year from {inputs['start_year']} to {inputs['end_year']}."
+                            f"Basic forecast format exported to:\n{basic_forecast_path}\n\n"
+                            f"Detailed CSV contains load data by polygon, category, and year from {inputs['start_year']} to {inputs['end_year']}.\n\n"
+                            f"Basic forecast CSV contains current year ({inputs['end_year']}) loads by zone in format: Zone, Residential, Commercial, Industrial"
                         )
                     else:
                         from qgis.PyQt.QtWidgets import QMessageBox
@@ -696,7 +1285,20 @@ class HistoricalAnalysisPlugin:
                             "CSV Export Failed",
                             "Failed to export CSV. Check the log for details."
                         )
-                else:
+                
+                # Check if user wants to create plots
+                if inputs.get('create_plots', False):
+                    # Create historical load plots
+                    self.create_historical_load_plots(
+                        excel_file_path=inputs['excel_file'],
+                        zone_layer=inputs['zone_layer'],
+                        pipe_layer=inputs['pipe_layer'],
+                        start_year=inputs['start_year'],
+                        end_year=inputs['end_year']
+                    )
+                
+                # Run standard analysis if not just exporting
+                if not inputs.get('export_csv', False) or not inputs.get('create_plots', False):
                     # Process the data with user inputs for standard analysis
                     historical_data = self.analyze_historical_loads_by_period(
                         excel_file_path=inputs['excel_file'],
@@ -891,6 +1493,18 @@ class HistoricalAnalysisPlugin:
             )
             export_layout.addRow(self.csv_export_checkbox)
             
+            self.plots_checkbox = QCheckBox("Create historical load plots")
+            self.plots_checkbox.setToolTip(
+                "Generate plots showing historical loads over time:\n"
+                "• One plot per area/zone\n"
+                "• Residential loads in blue\n"
+                "• Commercial loads in red\n"
+                "• Industrial loads in purple\n"
+                "• Includes 5-year average growth rates\n"
+                "Requires matplotlib to be installed"
+            )
+            export_layout.addRow(self.plots_checkbox)
+            
             export_group.setLayout(export_layout)
             layout.addWidget(export_group)
             
@@ -932,7 +1546,8 @@ class HistoricalAnalysisPlugin:
                     'pipe_layer': pipe_layer,
                     'start_year': self.start_year_spin.value(),
                     'end_year': self.end_year_spin.value(),
-                    'export_csv': getattr(self, '_csv_export_requested', False)
+                    'export_csv': getattr(self, '_csv_export_requested', False) or self.csv_export_checkbox.isChecked(),
+                    'create_plots': self.plots_checkbox.isChecked()
                 }
             else:
                 return False, {}

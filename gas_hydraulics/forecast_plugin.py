@@ -301,14 +301,18 @@ class ForecastPlugin:
             
             if polygon_layer and pipe_layer:
                 LOGGER.info("Processing polygons for cumulative load calculation...")
+                LOGGER.info("Using intersects with overlap-based assignment to prevent double counting...")
+                
+                # Build pipe-to-polygon mapping once to prevent double counting
+                pipe_to_polygon, polygon_to_pipes = self._build_pipe_to_polygon_mapping(polygon_layer, pipe_layer)
                 
                 for polygon_feature in polygon_layer.getFeatures():
                     # Get polygon name
                     polygon_name = self._get_polygon_name(polygon_feature)
                     
-                    # Find pipes in this polygon
-                    pipe_names = self._get_pipes_in_polygon(polygon_feature, pipe_layer)
-                    LOGGER.info(f"Polygon {polygon_name}: Found {len(pipe_names)} pipes")
+                    # Get pipes assigned to this polygon (no double counting)
+                    pipe_names = list(polygon_to_pipes.get(polygon_name, set()))
+                    LOGGER.info(f"Polygon {polygon_name}: {len(pipe_names)} pipes (no double counting)")
                     
                     # Initialize polygon results
                     results[polygon_name] = {}
@@ -369,8 +373,114 @@ class ForecastPlugin:
             
         return str(polygon_name)
     
+    def _build_pipe_to_polygon_mapping(self, polygon_layer, pipe_layer):
+        """
+        Build a mapping of pipes to polygons based on maximum overlap.
+        Each pipe is assigned to exactly one polygon (the one it overlaps most with).
+        This prevents double counting when polygons overlap or pipes cross boundaries.
+        
+        Args:
+            polygon_layer: The polygon layer
+            pipe_layer: The pipe layer
+            
+        Returns:
+            Tuple of (pipe_to_polygon dict, polygon_to_pipes dict)
+            - pipe_to_polygon: Maps pipe_name -> polygon_name
+            - polygon_to_pipes: Maps polygon_name -> set of pipe_names
+        """
+        try:
+            from qgis.core import QgsGeometry
+            
+            pipe_to_polygon = {}
+            all_pipes_checked = set()
+            
+            LOGGER.info("Building pipe-to-polygon mapping (one pipe = one polygon, based on maximum overlap)...")
+            
+            for pipe_feature in pipe_layer.getFeatures():
+                pipe_geom = pipe_feature.geometry()
+                if pipe_geom.isEmpty():
+                    continue
+                
+                # Get pipe name
+                pipe_name = None
+                name_fields = ['Name', 'name', 'NAME', 'pipe_name', 'Pipe_Name', 'id', 'ID']
+                for field_name in name_fields:
+                    try:
+                        pipe_name = pipe_feature.attribute(field_name)
+                        if pipe_name is not None and str(pipe_name).strip():
+                            break
+                    except:
+                        continue
+                
+                if pipe_name is None:
+                    pipe_name = f"Pipe_{pipe_feature.id()}"
+                
+                pipe_name = str(pipe_name)
+                all_pipes_checked.add(pipe_name)
+                
+                # Find which polygons this pipe intersects
+                max_overlap = 0
+                best_polygon = None
+                polygons_intersected = []
+                
+                for polygon_feature in polygon_layer.getFeatures():
+                    polygon_geom = polygon_feature.geometry()
+                    if polygon_geom.isEmpty():
+                        continue
+                    
+                    polygon_name = self._get_polygon_name(polygon_feature)
+                    
+                    # Check intersection
+                    if polygon_geom.intersects(pipe_geom):
+                        polygons_intersected.append(polygon_name)
+                        try:
+                            intersection = polygon_geom.intersection(pipe_geom)
+                            overlap = intersection.length() if not intersection.isEmpty() else 0
+                            
+                            if overlap > max_overlap:
+                                max_overlap = overlap
+                                best_polygon = polygon_name
+                        except:
+                            if best_polygon is None:
+                                best_polygon = polygon_name
+                
+                # Assign pipe to the polygon with maximum overlap
+                if best_polygon is not None:
+                    pipe_to_polygon[pipe_name] = best_polygon
+                    if len(polygons_intersected) > 1:
+                        LOGGER.info(f"Pipe '{pipe_name}' intersects {len(polygons_intersected)} polygons: {polygons_intersected}")
+                        LOGGER.info(f"  -> Assigned to '{best_polygon}' (maximum overlap: {max_overlap:.2f})")
+            
+            # Build reverse mapping: polygon -> pipes
+            polygon_to_pipes = {}
+            for pipe_name, polygon_name in pipe_to_polygon.items():
+                if polygon_name not in polygon_to_pipes:
+                    polygon_to_pipes[polygon_name] = set()
+                polygon_to_pipes[polygon_name].add(pipe_name)
+            
+            LOGGER.info(f"Pipe-to-polygon mapping complete:")
+            LOGGER.info(f"  Total pipes checked: {len(all_pipes_checked)}")
+            LOGGER.info(f"  Pipes assigned to polygons: {len(pipe_to_polygon)}")
+            LOGGER.info(f"  Pipes not assigned: {len(all_pipes_checked) - len(pipe_to_polygon)}")
+            LOGGER.info(f"  Polygons with pipes: {len(polygon_to_pipes)}")
+            
+            return pipe_to_polygon, polygon_to_pipes
+            
+        except Exception as e:
+            LOGGER.error(f"Error building pipe-to-polygon mapping: {e}")
+            import traceback
+            LOGGER.error(f"Traceback: {traceback.format_exc()}")
+            return {}, {}
+    
     def _get_pipes_in_polygon(self, polygon_feature, pipe_layer):
-        """Get list of pipe names that intersect with the polygon."""
+        """Get list of pipe names that intersect with the polygon.
+        
+        **DEPRECATED**: This method may double-count pipes if they intersect multiple polygons.
+        Use _build_pipe_to_polygon_mapping() instead to prevent double counting.
+        """
+        LOGGER.warning("_get_pipes_in_polygon() is deprecated and may cause double counting.")
+        LOGGER.warning("Consider using _build_pipe_to_polygon_mapping() instead.")
+        
         try:
             from qgis.core import QgsGeometry
             
@@ -759,6 +869,10 @@ class ForecastPlugin:
                 LOGGER.warning(f"Growth dict contains invalid value for year {year}: {growth_value}. Using 0")
         
         for year_idx, year in enumerate(range(start_year + 1, end_year + 1)):
+            # year_idx is 0-based from (start_year+1), but total_units_changes is indexed from start_year
+            # So we need to offset by 1 to get the right growth value
+            growth_idx = year_idx + 1
+            
             # Calculate development percentage for each area
             development_pct = [res_dict[year-1][i] / list(ultimate_units.values())[i] 
                              if list(ultimate_units.values())[i] != 0 else 0
@@ -803,6 +917,8 @@ class ForecastPlugin:
                             unit_inv[i] *= 0.5
                         elif 'Depriority (0.25x)' in priority_level:
                             unit_inv[i] *= 0.25
+                        elif 'Zero Priority (0.0x)' in priority_level:
+                            unit_inv[i] = 0.0
                         # Normal (1.0x) doesn't change the value
                         
                         priority_applied = True
@@ -817,11 +933,11 @@ class ForecastPlugin:
             # Use numpy if available, otherwise use list comprehension
             try:
                 import numpy as np
-                units = np.array(unit_inv) * total_units_changes[year_idx] + res_dict[year - 1]
+                units = np.array(unit_inv) * total_units_changes[growth_idx] + res_dict[year - 1]
                 units = units.tolist()
             except ImportError:
                 # Fallback without numpy
-                units = [unit_inv[i] * total_units_changes[year_idx] + res_dict[year - 1][i] 
+                units = [unit_inv[i] * total_units_changes[growth_idx] + res_dict[year - 1][i] 
                         for i in range(len(unit_inv))]
             
             # Handle excess over ultimate capacity
@@ -840,28 +956,87 @@ class ForecastPlugin:
                 negative_indices = [i for i, val in enumerate(diff) if val < 0]
             
             # Process negative indices (areas over ultimate capacity)
+            # Track unallocated load that needs to be pushed to next year
+            unallocated_load = 0.0
+            
             for idx in negative_indices:
                     excess_load = -diff[idx]
                     units[idx] = list(ultimate_units.values())[idx]
-                    remaining_indices = [i for i in range(len(units)) if i not in negative_indices]
+                    
+                    # Find remaining areas that are not at capacity AND have non-zero priority
+                    # (unit_inv > 0 means the area can accept load based on priority)
+                    remaining_indices = [i for i in range(len(units)) 
+                                       if i not in negative_indices and unit_inv[i] > 0]
                     remaining_unit_inv = [unit_inv[i] for i in remaining_indices]
                     total_remaining_inv = sum(remaining_unit_inv)
+                    
                     if total_remaining_inv > 0:
+                        # Redistribute excess to eligible areas
                         for i in remaining_indices:
                             units[i] += (unit_inv[i] / total_remaining_inv) * excess_load
                     else:
-                        units = list(ultimate_units.values())
-                        break
+                        # No eligible areas to receive excess load
+                        # This happens when all non-full areas have zero priority
+                        # Track this load to be pushed to next year
+                        unallocated_load += excess_load
+                        LOGGER.warning(f"Year {year}: Cannot allocate {excess_load:.2f} units from {areas[idx]} "
+                                     f"(all remaining areas either at capacity or have zero priority). "
+                                     f"Load will be deferred to next year.")
+            
+            # If there's unallocated load, reduce the total growth for this year
+            # It will naturally appear in the next year's growth calculation
+            if unallocated_load > 0:
+                LOGGER.info(f"Year {year}: Deferring {unallocated_load:.2f} units to next year")
 
             # Adjustment factor to match total growth
+            # Account for unallocated load when calculating target growth
+            target_growth = total_units_changes[growth_idx] - unallocated_load
+            
             total_units_added_actual = sum(units) - sum(res_dict[year - 1])
             if total_units_added_actual != 0:
-                if total_units_added_actual != total_units_changes[year_idx]:
-                    adjustment_factor = total_units_changes[year_idx] / total_units_added_actual
-                    units = [u * adjustment_factor for u in units]
+                if total_units_added_actual != target_growth:
+                    adjustment_factor = target_growth / total_units_added_actual
+                    # Apply adjustment but prevent negative values
+                    proposed_units = [u * adjustment_factor for u in units]
+                    
+                    # Check if adjustment would cause negative values
+                    if any(u < 0 for u in proposed_units):
+                        # Don't apply full adjustment - distribute growth proportionally instead
+                        LOGGER.warning(f"Year {year}: Adjustment factor {adjustment_factor:.2f} would cause negative values. Using proportional distribution.")
+                        # Distribute the target growth proportionally to areas not at capacity with non-zero priority
+                        available_indices = [i for i in range(len(units)) 
+                                           if units[i] < list(ultimate_units.values())[i] and unit_inv[i] > 0]
+                        if available_indices:
+                            available_inv = [unit_inv[i] for i in available_indices]
+                            total_available_inv = sum(available_inv)
+                            if total_available_inv > 0:
+                                for i in available_indices:
+                                    growth_share = (unit_inv[i] / total_available_inv) * target_growth
+                                    units[i] = res_dict[year - 1][i] + growth_share
+                            else:
+                                # No capacity in eligible areas - defer to next year
+                                LOGGER.warning(f"Year {year}: No capacity in non-zero priority areas. "
+                                             f"Deferring {target_growth:.2f} units to next year.")
+                                units = res_dict[year - 1]
+                        else:
+                            # All areas either at capacity or have zero priority - defer to next year
+                            LOGGER.warning(f"Year {year}: All areas at capacity or zero priority. "
+                                         f"Deferring {target_growth:.2f} units to next year.")
+                            units = res_dict[year - 1]
+                    else:
+                        units = proposed_units
             else:
                 adjustment_factor = 1
                 units = [u * adjustment_factor for u in units]
+
+            # Final safety check: ensure no values are negative
+            units = [max(0, u) for u in units]
+            
+            # Final safety check: ensure no values exceed ultimate
+            for i in range(len(units)):
+                if units[i] > list(ultimate_units.values())[i]:
+                    LOGGER.warning(f"Year {year}, Area {areas[i]}: Load {units[i]:.2f} exceeds ultimate {list(ultimate_units.values())[i]:.2f}. Capping.")
+                    units[i] = list(ultimate_units.values())[i]
 
             res_dict[year] = units
             supply = [l - u for u, l in zip(units, list(ultimate_units.values()))]
@@ -910,8 +1085,14 @@ class ForecastPlugin:
             LOGGER.info(f"Found {len(spatial_areas)} spatial areas")
             print(f"Found {len(spatial_areas)} spatial areas")
             
+            # Get current loads from polygon layer
+            current_loads = self.get_current_loads_from_layer(inputs['polygon_layer'])
+            LOGGER.info(f"Extracted current loads for {len(current_loads)} areas")
+            print(f"Extracted current loads for {len(current_loads)} areas")
+            
             # Check if aggregation mode is enabled
             aggregate_polygons = inputs.get('aggregate_polygons', False)
+            assume_linear = inputs.get('assume_linear', False)
             
             if aggregate_polygons:
                 LOGGER.info(" Using aggregated polygon regression analysis")
@@ -920,10 +1101,12 @@ class ForecastPlugin:
                     population_data,
                     housing_data,
                     spatial_areas,
+                    current_loads,
                     inputs['forecast_start_year'],
                     inputs['forecast_end_year'],
                     inputs['growth_rates'],
-                    inputs.get('priority_zones', [])
+                    inputs.get('priority_zones', []),
+                    assume_linear=assume_linear
                 )
             else:
                 LOGGER.info(" Using individual polygon regression analysis")
@@ -932,10 +1115,12 @@ class ForecastPlugin:
                     population_data,
                     housing_data,
                     spatial_areas,
+                    current_loads,
                     inputs['forecast_start_year'],
                     inputs['forecast_end_year'],
                     inputs['growth_rates'],
-                    inputs.get('priority_zones', [])
+                    inputs.get('priority_zones', []),
+                    assume_linear=assume_linear
                 )
             
             LOGGER.info(" Enhanced forecasting completed successfully")
@@ -970,6 +1155,15 @@ class ForecastPlugin:
                 start_year,
                 end_year,
                 priority_zones=inputs.get('priority_zones', [])
+            )
+            
+            # Validate forecast results
+            self.validate_forecast_results(
+                forecast_results,
+                inputs['current_loads'],
+                inputs['ultimate_loads'],
+                inputs['growth_projection'],
+                start_year
             )
             
             LOGGER.info(" Basic forecasting completed successfully")
@@ -1050,9 +1244,98 @@ class ForecastPlugin:
             LOGGER.error(f"Error getting spatial areas: {e}")
             return []
 
+    def get_current_loads_from_layer(self, layer_name):
+        """Extract current load data from polygon layer by area and class.
+        
+        Returns dict like: {area_name: {'residential': load, 'commercial': load, 'industrial': load}}
+        """
+        try:
+            from qgis.core import QgsProject
+            
+            project = QgsProject.instance()
+            layer = None
+            
+            # Find the layer by name
+            for layer_id, layer_obj in project.mapLayers().items():
+                if layer_obj.name() == layer_name:
+                    layer = layer_obj
+                    break
+            
+            if not layer:
+                LOGGER.warning(f"Layer '{layer_name}' not found for load extraction")
+                return {}
+            
+            loads = {}
+            field_names = [field.name() for field in layer.fields()]
+            LOGGER.info(f"Available fields in layer: {field_names}")
+            
+            # Determine which load fields exist
+            load_field_map = {}
+            possible_names = {
+                'residential': ['residential', 'Residential', 'RESIDENTIAL', 'res', 'Res', 'RES'],
+                'commercial': ['commercial', 'Commercial', 'COMMERCIAL', 'com', 'Com', 'COM'],
+                'industrial': ['industrial', 'Industrial', 'INDUSTRIAL', 'ind', 'Ind', 'IND']
+            }
+            
+            for load_class, possible_field_names in possible_names.items():
+                for field_name in possible_field_names:
+                    if field_name in field_names:
+                        load_field_map[load_class] = field_name
+                        break
+            
+            LOGGER.info(f"Found load fields: {load_field_map}")
+            
+            for feature in layer.getFeatures():
+                # Get area name
+                area_name = None
+                for field_name in ['name', 'Name', 'NAME', 'area', 'Area', 'AREA', 'id', 'ID']:
+                    if field_name in field_names:
+                        area_name = feature[field_name]
+                        break
+                
+                if not area_name:
+                    continue
+                
+                area_name = str(area_name)
+                loads[area_name] = {}
+                
+                # Extract loads for each class
+                for load_class, field_name in load_field_map.items():
+                    try:
+                        load_value = feature[field_name]
+                        loads[area_name][load_class] = float(load_value) if load_value is not None else 0.0
+                    except (ValueError, TypeError):
+                        loads[area_name][load_class] = 0.0
+                
+                # If no load fields found, initialize to zero
+                for load_class in ['residential', 'commercial', 'industrial']:
+                    if load_class not in loads[area_name]:
+                        loads[area_name][load_class] = 0.0
+            
+            LOGGER.info(f"Extracted loads for {len(loads)} areas")
+            return loads
+            
+        except Exception as e:
+            LOGGER.error(f"Error extracting current loads: {e}")
+            import traceback
+            LOGGER.error(f"Full traceback: {traceback.format_exc()}")
+            return {}
+
     def perform_regression_forecasting(self, population_data, housing_data, spatial_areas, 
-                                     start_year, end_year, growth_rates, priority_zones=None):
-        """Perform regression-based forecasting using population and housing data."""
+                                     current_loads, start_year, end_year, growth_rates, priority_zones=None,
+                                     assume_linear=False):
+        """Perform regression-based forecasting using population and housing data.
+        
+        Args:
+            population_data: Population data by area
+            housing_data: Housing data by area
+            spatial_areas: List of spatial area names
+            start_year: Start year for forecast
+            end_year: End year for forecast
+            growth_rates: Growth rates by class
+            priority_zones: List of priority zone configurations
+            assume_linear: If True, use only population for linear regression (ignore housing)
+        """
         try:
             from sklearn.linear_model import LinearRegression
             import numpy as np
@@ -1071,6 +1354,7 @@ class ForecastPlugin:
                 # Get historical data for this area
                 pop_history = population_data.get(area, {})
                 housing_history = housing_data.get(area, {})
+                area_current_loads = current_loads.get(area, {})
                 
                 if not pop_history and not housing_history:
                     LOGGER.warning(f"No data available for area {area}")
@@ -1078,8 +1362,12 @@ class ForecastPlugin:
                 
                 # Residential forecasting based on population/housing
                 if pop_history or housing_history:
-                    # Use population data if available, otherwise housing data
-                    base_data = pop_history if pop_history else housing_history
+                    # Use only population if assume_linear is True, otherwise use housing if available
+                    if assume_linear:
+                        base_data = pop_history
+                        LOGGER.info(f"Using linear regression (population only) for {area} residential")
+                    else:
+                        base_data = housing_history if housing_history else pop_history
                     
                     if len(base_data) >= 2:  # Need at least 2 points for regression
                         years = list(base_data.keys())
@@ -1096,8 +1384,16 @@ class ForecastPlugin:
                         future_years = np.array(forecast_years).reshape(-1, 1)
                         projected_base = model.predict(future_years)
                         
-                        # Convert to residential load (assume some per-capita or per-unit factor)
-                        residential_factor = 2.5  # Example: 2.5 GJ per person per year
+                        # Calculate residential load factor from current data
+                        current_res_load = area_current_loads.get('residential', 0.0)
+                        if base_data and current_res_load > 0:
+                            most_recent_year = max(base_data.keys())
+                            most_recent_value = base_data[most_recent_year]
+                            residential_factor = current_res_load / most_recent_value if most_recent_value > 0 else 2.5
+                            unit_type = "housing unit" if (not assume_linear and housing_history) else "person"
+                            LOGGER.info(f"{area} residential: Calculated factor = {residential_factor:.3f} GJ/{unit_type} (from {current_res_load:.1f} GJ / {most_recent_value} {unit_type}s)")
+                        else:
+                            residential_factor = 2.5  # Default fallback
                         
                         for i, year in enumerate(forecast_years):
                             if year not in results['residential']:
@@ -1126,8 +1422,15 @@ class ForecastPlugin:
                         future_years = np.array(forecast_years).reshape(-1, 1)
                         projected_pop = model.predict(future_years)
                         
-                        # Commercial factor (different from residential)
-                        commercial_factor = 1.8  # Example: 1.8 GJ per person per year for commercial
+                        # Calculate commercial factor from current data
+                        current_com_load = area_current_loads.get('commercial', 0.0)
+                        if pop_history and current_com_load > 0:
+                            most_recent_year = max(pop_history.keys())
+                            most_recent_pop = pop_history[most_recent_year]
+                            commercial_factor = current_com_load / most_recent_pop if most_recent_pop > 0 else 1.8
+                            LOGGER.info(f"{area} commercial: Calculated factor = {commercial_factor:.3f} GJ/person (from {current_com_load:.1f} GJ / {most_recent_pop} people)")
+                        else:
+                            commercial_factor = 1.8  # Default fallback
                         
                         for i, year in enumerate(forecast_years):
                             if year not in results['commercial']:
@@ -1156,7 +1459,8 @@ class ForecastPlugin:
             return None
 
     def perform_aggregated_regression_forecasting(self, population_data, housing_data, spatial_areas, 
-                                                start_year, end_year, growth_rates, priority_zones=None):
+                                                current_loads, start_year, end_year, growth_rates, priority_zones=None,
+                                                assume_linear=False):
         """Perform regression-based forecasting using combined polygon data.
         
         This method aggregates all polygon data, performs regression analysis on the combined dataset
@@ -1170,6 +1474,8 @@ class ForecastPlugin:
             start_year: Start year for forecast
             end_year: End year for forecast
             growth_rates: Growth rates by class
+            priority_zones: List of priority zone configurations
+            assume_linear: If True, use only population for linear regression (ignore housing)
             
         Returns:
             Dictionary with forecast results by class, year, and area
@@ -1211,22 +1517,63 @@ class ForecastPlugin:
             forecast_years = list(range(start_year, end_year + 1))
             total_growth_by_class = {}
             
+            # Calculate total current loads across all areas
+            total_current_loads = {'residential': 0.0, 'commercial': 0.0, 'industrial': 0.0}
+            for area_loads in current_loads.values():
+                for load_class in ['residential', 'commercial', 'industrial']:
+                    total_current_loads[load_class] += area_loads.get(load_class, 0.0)
+            
+            LOGGER.info(f"Total current loads: {total_current_loads}")
+            
             # Calculate total growth patterns by class using regression
             for load_class in ['residential', 'commercial', 'industrial']:
                 LOGGER.info(f"Analyzing {load_class} growth pattern")
                 
-                if load_class == 'residential':
+                # Calculate load factor from aggregated current data
+                current_total_load = total_current_loads[load_class]
+                
+                if assume_linear:
+                    # Use only population for all load classes (linear regression)
+                    base_data = combined_population
+                    # Calculate GJ per person from most recent aggregated data
+                    if combined_population and current_total_load > 0:
+                        most_recent_year = max(combined_population.keys())
+                        most_recent_pop = combined_population[most_recent_year]
+                        load_factor = current_total_load / most_recent_pop if most_recent_pop > 0 else (2.5 if load_class == 'residential' else 1.8 if load_class == 'commercial' else 0.8)
+                        LOGGER.info(f"{load_class}: Calculated aggregated factor = {load_factor:.3f} GJ/person (from {current_total_load:.1f} GJ / {most_recent_pop} people)")
+                    else:
+                        load_factor = 2.5 if load_class == 'residential' else 1.8 if load_class == 'commercial' else 0.8
+                    LOGGER.info(f"Using linear regression (population only) for {load_class}")
+                else:
                     # Use housing data for residential if available, otherwise population
-                    base_data = combined_housing if combined_housing else combined_population
-                    load_factor = 2.5  # GJ per housing unit or adjusted per person
-                elif load_class == 'commercial':
-                    # Use population data for commercial
-                    base_data = combined_population
-                    load_factor = 1.8  # GJ per person for commercial activity
-                else:  # industrial
-                    # Use population data with different factor for industrial
-                    base_data = combined_population
-                    load_factor = 0.8  # GJ per person for industrial activity
+                    if load_class == 'residential':
+                        base_data = combined_housing if combined_housing else combined_population
+                        if base_data and current_total_load > 0:
+                            most_recent_year = max(base_data.keys())
+                            most_recent_value = base_data[most_recent_year]
+                            load_factor = current_total_load / most_recent_value if most_recent_value > 0 else 2.5
+                            unit_type = "housing unit" if combined_housing else "person"
+                            LOGGER.info(f"{load_class}: Calculated aggregated factor = {load_factor:.3f} GJ/{unit_type} (from {current_total_load:.1f} GJ / {most_recent_value} {unit_type}s)")
+                        else:
+                            load_factor = 2.5
+                    elif load_class == 'commercial':
+                        base_data = combined_population
+                        if combined_population and current_total_load > 0:
+                            most_recent_year = max(combined_population.keys())
+                            most_recent_pop = combined_population[most_recent_year]
+                            load_factor = current_total_load / most_recent_pop if most_recent_pop > 0 else 1.8
+                            LOGGER.info(f"{load_class}: Calculated aggregated factor = {load_factor:.3f} GJ/person (from {current_total_load:.1f} GJ / {most_recent_pop} people)")
+                        else:
+                            load_factor = 1.8
+                    else:  # industrial
+                        base_data = combined_population
+                        if combined_population and current_total_load > 0:
+                            most_recent_year = max(combined_population.keys())
+                            most_recent_pop = combined_population[most_recent_year]
+                            load_factor = current_total_load / most_recent_pop if most_recent_pop > 0 else 0.8
+                            LOGGER.info(f"{load_class}: Calculated aggregated factor = {load_factor:.3f} GJ/person (from {current_total_load:.1f} GJ / {most_recent_pop} people)")
+                        else:
+                            load_factor = 0.8
                 
                 if not base_data or len(base_data) < 2:
                     LOGGER.warning(f"Insufficient data for {load_class} regression")
@@ -1506,6 +1853,124 @@ class ForecastPlugin:
                     }
         
         return results
+
+    def validate_forecast_results(self, forecast_results: Dict[str, Dict[int, Dict[str, float]]],
+                                  current_loads: Dict[str, Dict[str, float]],
+                                  ultimate_loads: Dict[str, Dict[str, float]],
+                                  growth_projection: Dict[int, float],
+                                  start_year: int) -> bool:
+        """Validate forecast results for consistency and constraints.
+        
+        Checks:
+        1. Start load + CSV growth = final forecast load for each year
+        2. No area exceeds its ultimate capacity
+        3. No negative loads
+        
+        Args:
+            forecast_results: Forecast results by class, year, area
+            current_loads: Current loads by area and class
+            ultimate_loads: Ultimate loads by area and class
+            growth_projection: Annual growth projections from CSV
+            start_year: Starting year
+            
+        Returns:
+            bool: True if validation passes, False otherwise
+        """
+        validation_passed = True
+        
+        LOGGER.info("\n" + "="*80)
+        LOGGER.info("VALIDATING FORECAST RESULTS")
+        LOGGER.info("="*80)
+        
+        # Get all areas
+        all_areas = set()
+        for load_class in ['residential', 'commercial', 'industrial']:
+            if load_class in forecast_results:
+                for year_data in forecast_results[load_class].values():
+                    all_areas.update(year_data.keys())
+        
+        # Check 1: Verify total growth matches CSV input
+        LOGGER.info("\n1. Checking that forecast matches CSV growth projections:")
+        for year in sorted(forecast_results.get('residential', {}).keys()):
+            if year == start_year:
+                continue  # Skip start year
+                
+            # Calculate actual total load for this year
+            year_total = 0
+            prev_year_total = 0
+            
+            for load_class in ['residential', 'commercial', 'industrial']:
+                if load_class in forecast_results:
+                    if year in forecast_results[load_class]:
+                        year_total += sum(forecast_results[load_class][year].values())
+                    if year - 1 in forecast_results[load_class]:
+                        prev_year_total += sum(forecast_results[load_class][year - 1].values())
+            
+            actual_growth = year_total - prev_year_total
+            
+            # Get expected growth from CSV
+            expected_growth = 0
+            if isinstance(growth_projection.get(year), dict):
+                for load_class in ['residential', 'commercial', 'industrial']:
+                    expected_growth += growth_projection[year].get(load_class, 0)
+            else:
+                expected_growth = growth_projection.get(year, 0)
+            
+            diff = abs(actual_growth - expected_growth)
+            if diff > 0.01:  # Allow small rounding errors
+                LOGGER.warning(f"   Year {year}: Expected growth {expected_growth:.2f}, Actual growth {actual_growth:.2f}, Diff {diff:.2f}")
+                validation_passed = False
+            else:
+                LOGGER.info(f"   Year {year}: Growth matches ({actual_growth:.2f} GJ/d) ✓")
+        
+        # Check 2: Verify no area exceeds ultimate capacity
+        LOGGER.info("\n2. Checking that no area exceeds ultimate capacity:")
+        for load_class in ['residential', 'commercial', 'industrial']:
+            if load_class not in forecast_results:
+                continue
+                
+            for year, area_loads in forecast_results[load_class].items():
+                for area, load in area_loads.items():
+                    # Get ultimate for this area and class
+                    ultimate = 0
+                    if area in ultimate_loads:
+                        if load_class == 'residential':
+                            ultimate = ultimate_loads[area].get('residential', 0) + ultimate_loads[area].get('apartments', 0)
+                        else:
+                            ultimate = ultimate_loads[area].get(load_class, 0)
+                    
+                    if load > ultimate + 0.01:  # Allow small rounding errors
+                        LOGGER.error(f"   {area} ({load_class}) Year {year}: Load {load:.2f} EXCEEDS ultimate {ultimate:.2f}!")
+                        validation_passed = False
+                    elif year == max(forecast_results[load_class].keys()) and ultimate > 0:
+                        pct = (load / ultimate) * 100
+                        LOGGER.info(f"   {area} ({load_class}): {load:.2f} / {ultimate:.2f} ({pct:.1f}%) ✓")
+        
+        # Check 3: Verify no negative loads
+        LOGGER.info("\n3. Checking for negative loads:")
+        found_negative = False
+        for load_class in ['residential', 'commercial', 'industrial']:
+            if load_class not in forecast_results:
+                continue
+                
+            for year, area_loads in forecast_results[load_class].items():
+                for area, load in area_loads.items():
+                    if load < 0:
+                        LOGGER.error(f"   {area} ({load_class}) Year {year}: NEGATIVE load {load:.2f}!")
+                        validation_passed = False
+                        found_negative = True
+        
+        if not found_negative:
+            LOGGER.info("   No negative loads found ✓")
+        
+        LOGGER.info("\n" + "="*80)
+        if validation_passed:
+            LOGGER.info("VALIDATION PASSED ✓")
+        else:
+            LOGGER.error("VALIDATION FAILED - See warnings/errors above")
+        LOGGER.info("="*80 + "\n")
+        
+        return validation_passed
 
     def create_forecast_output(self, forecast_results: Dict[str, Dict[int, Dict[str, float]]]):
         """Create output layer/table with forecast results."""
@@ -2114,7 +2579,8 @@ class ForecastPlugin:
                 "   • 2.0× Priority: High-priority development zones (200% of base growth)\n"
                 "   • 1.0× Normal: Standard growth areas (100% - default for all zones)\n"
                 "   • 0.5× Depriority: Limited growth areas, conservation zones (50% of base growth)\n"
-                "   • 0.25× Depriority: Minimal growth, protected/restricted areas (25% of base growth)\n\n"
+                "   • 0.25× Depriority: Minimal growth, protected/restricted areas (25% of base growth)\n"
+                "   • 0.0× Zero: No growth zones, frozen/excluded areas (0% - no new loads)\n\n"
                 "⏰ Time Periods: Different priorities can be set for different forecast years"
             )
             priority_desc.setWordWrap(True)
@@ -2138,7 +2604,7 @@ class ForecastPlugin:
             self.priority_zones_table.setToolTip(
                 "Configure zone-specific growth multipliers\n"
                 "Zone Name: Must match area names in your polygon layer\n"
-                "Priority Level: 2.5×, 2.0×, 1.0× (normal), 0.5×, or 0.25×\n"
+                "Priority Level: 2.5×, 2.0×, 1.0× (normal), 0.5×, 0.25×, or 0.0×\n"
                 "Years: Time period when this priority applies"
             )
             
@@ -2260,6 +2726,20 @@ class ForecastPlugin:
             )
             params_layout.addRow(" Aggregate Polygons for Regression:", self.aggregate_polygons_checkbox)
             
+            # Add linear regression flag
+            self.assume_linear_checkbox = QCheckBox()
+            self.assume_linear_checkbox.setChecked(False)
+            self.assume_linear_checkbox.setToolTip(
+                "When checked, uses simple linear regression between population and loads (ignores housing data).\n"
+                "Performs linear regression for each load class:\n"
+                "  • Residential Load = f(Population)\n"
+                "  • Commercial Load = f(Population)\n"
+                "  • Industrial Load = f(Population)\n\n"
+                " Use when: Housing data is unavailable or unreliable\n"
+                " Result: Simpler model based only on population trends"
+            )
+            params_layout.addRow(" Assume Linear (Population → Load):", self.assume_linear_checkbox)
+            
             params_main_layout.addLayout(params_layout)
             params_main_layout.addStretch()
             params_tab.setLayout(params_main_layout)
@@ -2287,17 +2767,17 @@ class ForecastPlugin:
                 inputs = {
                     'polygon_layer': self.polygon_layer_combo.currentText(),
                     'pipe_layer': self.pipe_layer_combo.currentText(),
-                    'population_file': self.pop_file_edit.text(),
+                    'population_file': self.pop_housing_file_edit.text(),
                     'population_fields': {
-                        'area': self.pop_area_field.text(),
-                        'year': self.pop_year_field.text(),
-                        'value': self.pop_value_field.text()
+                        'area': '',  # Not used in enhanced mode
+                        'year': '',  # Not used in enhanced mode
+                        'value': ''  # Not used in enhanced mode
                     },
-                    'housing_file': self.housing_file_edit.text(),
+                    'housing_file': self.pop_housing_file_edit.text(),  # Same file for both
                     'housing_fields': {
-                        'area': self.housing_area_field.text(),
-                        'year': self.housing_year_field.text(),
-                        'value': self.housing_value_field.text()
+                        'area': '',  # Not used in enhanced mode
+                        'year': '',  # Not used in enhanced mode
+                        'value': ''  # Not used in enhanced mode
                     },
                     'forecast_start_year': self.forecast_start_year.value(),
                     'forecast_end_year': self.forecast_end_year.value(),
@@ -2306,6 +2786,7 @@ class ForecastPlugin:
                         'commercial': self.growth_rate_commercial.value() / 100.0
                     },
                     'aggregate_polygons': self.aggregate_polygons_checkbox.isChecked(),
+                    'assume_linear': self.assume_linear_checkbox.isChecked(),
                     'priority_zones': self.collect_priority_zones_data()
                 }
                 return True, inputs
@@ -2483,7 +2964,8 @@ class ForecastPlugin:
                     "Priority (2.0x)", 
                     "Normal (1.0x)",
                     "Low Priority (0.5x)",
-                    "Depriority (0.25x)"
+                    "Depriority (0.25x)",
+                    "Zero Priority (0.0x)"
                 ])
                 # Set the appropriate selection
                 if priority_level == "High Priority":
@@ -2531,7 +3013,8 @@ class ForecastPlugin:
                 "Priority (2.0x)", 
                 "Normal (1.0x)",
                 "Low Priority (0.5x)",
-                "Depriority (0.25x)"
+                "Depriority (0.25x)",
+                "Zero Priority (0.0x)"
             ])
             priority_combo.setCurrentIndex(2)  # Default to Normal
             self.priority_zones_table.setCellWidget(current_row_count, 1, priority_combo)
@@ -3015,13 +3498,15 @@ class ForecastPlugin:
                 "• Priority: Growing areas with higher demand expectations\n"
                 "• Normal: Standard growth areas (default)\n"
                 "• Low Priority: Slower growing or transitioning areas\n"
-                "• Depriority: Areas with declining loads or pending redevelopment\n\n"
+                "• Depriority: Areas with declining loads or pending redevelopment\n"
+                "• Zero Priority: Frozen zones with no new growth allowed\n\n"
                 "Priority levels affect how loads are distributed:\n"
                 "• High Priority (2.5×): Zone gets 2.5 times normal allocation\n"
                 "• Priority (2.0×): Zone gets double normal allocation\n"
                 "• Normal (1.0×): Standard allocation (baseline)\n"
                 "• Low Priority (0.5×): Zone gets half normal allocation\n"
-                "• Depriority (0.25×): Zone gets quarter normal allocation\n\n"
+                "• Depriority (0.25×): Zone gets quarter normal allocation\n"
+                "• Zero Priority (0.0×): Zone gets no new loads (frozen)\n\n"
                 " Set start/end years to apply priority only during specific periods."
             )
             explanation.setWordWrap(True)
@@ -3112,7 +3597,8 @@ class ForecastPlugin:
                     "Priority (2.0x)", 
                     "Normal (1.0x)",
                     "Low Priority (0.5x)",
-                    "Depriority (0.25x)"
+                    "Depriority (0.25x)",
+                    "Zero Priority (0.0x)"
                 ])
                 # Set the appropriate selection
                 if priority_level == "High Priority (2.5x)":
@@ -3160,7 +3646,8 @@ class ForecastPlugin:
                 "Priority (2.0x)", 
                 "Normal (1.0x)",
                 "Low Priority (0.5x)",
-                "Depriority (0.25x)"
+                "Depriority (0.25x)",
+                "Zero Priority (0.0x)"
             ])
             priority_combo.setCurrentIndex(2)  # Default to Normal
             self.basic_priority_zones_table.setCellWidget(current_row_count, 1, priority_combo)
@@ -3340,11 +3827,22 @@ class ForecastPlugin:
             
             export_csv_button = QPushButton("Export to CSV")
             export_csv_button.clicked.connect(lambda: self.export_forecast_to_csv(forecast_results))
+            export_csv_button.setToolTip("Export detailed forecast by area and year (original format)")
+            
+            export_summary_button = QPushButton("Export Summary CSV")
+            export_summary_button.clicked.connect(lambda: self.export_forecast_summary_csv(forecast_results))
+            export_summary_button.setToolTip("Export summary with absolute and incremental loads by area")
+            
+            export_reforecast_button = QPushButton("Export for Reforecaster")
+            export_reforecast_button.clicked.connect(lambda: self.export_forecast_for_reforecaster(forecast_results))
+            export_reforecast_button.setToolTip("Export in simple Area,Year,Load format for use with Reforecaster tool")
             
             close_button = QPushButton("Close")
             close_button.clicked.connect(dialog.accept)
             
             button_layout.addWidget(export_csv_button)
+            button_layout.addWidget(export_summary_button)
+            button_layout.addWidget(export_reforecast_button)
             button_layout.addStretch()
             button_layout.addWidget(close_button)
             
@@ -3511,4 +4009,274 @@ class ForecastPlugin:
                     self.iface.mainWindow(),
                     "Export Error",
                     f"Error exporting forecast results:\n{str(e)}"
+                )
+    
+    def export_forecast_summary_csv(self, forecast_results):
+        """
+        Export forecast results in summary pivot table format with absolute and incremental loads.
+        
+        Format:
+        - Table 1: Load Forecast (GJ/d) with years as rows, areas as columns, TOTAL column
+        - Table 2: Incremental Load (GJ/d) showing period-over-period changes
+        
+        Args:
+            forecast_results: Dictionary containing forecast data
+                             Format: {load_class: {year: {area: load_value}}}
+        """
+        try:
+            from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+            import csv
+            
+            # Prompt for save location
+            file_path, _ = QFileDialog.getSaveFileName(
+                self.iface.mainWindow(),
+                "Export Summary Forecast to CSV",
+                "",
+                "CSV Files (*.csv)"
+            )
+            
+            if not file_path:
+                return  # User cancelled
+            
+            # Extract all unique years and areas
+            all_years = set()
+            all_areas = set()
+            
+            for load_class in ['residential', 'commercial', 'industrial']:
+                if load_class in forecast_results:
+                    for year, areas_dict in forecast_results[load_class].items():
+                        all_years.add(year)
+                        all_areas.update(areas_dict.keys())
+            
+            all_years = sorted(list(all_years))
+            all_areas = sorted(list(all_areas))
+            
+            if not all_years or not all_areas:
+                QMessageBox.warning(
+                    self.iface.mainWindow(),
+                    "No Data",
+                    "No forecast data available to export."
+                )
+                return
+            
+            # Calculate total loads per area per year (sum all load classes)
+            # Structure: {year: {area: total_load}}
+            total_loads = {}
+            
+            for year in all_years:
+                total_loads[year] = {}
+                
+                for area in all_areas:
+                    area_total = 0.0
+                    
+                    # Sum residential, commercial, industrial for this area/year
+                    for load_class in ['residential', 'commercial', 'industrial']:
+                        if load_class in forecast_results and year in forecast_results[load_class]:
+                            area_total += forecast_results[load_class][year].get(area, 0.0)
+                    
+                    total_loads[year][area] = area_total
+            
+            # Write CSV file
+            with open(file_path, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # === TABLE 1: Load Forecast (GJ/d) ===
+                writer.writerow(['Load Forecast (GJ/d)'])
+                writer.writerow([])
+                
+                # Header row: Year, Area1, Area2, ..., TOTAL
+                header = ['Year'] + all_areas + ['TOTAL']
+                writer.writerow(header)
+                
+                # Data rows: one per year
+                for year in all_years:
+                    row = [str(year)]
+                    
+                    # Add load for each area
+                    row_total = 0.0
+                    for area in all_areas:
+                        load = total_loads[year].get(area, 0.0)
+                        row.append(f"{load:.2f}")
+                        row_total += load
+                    
+                    # Add TOTAL column
+                    row.append(f"{row_total:.2f}")
+                    writer.writerow(row)
+                
+                # Empty rows for spacing
+                writer.writerow([])
+                writer.writerow([])
+                
+                # === TABLE 2: Incremental Load (GJ/d) ===
+                writer.writerow(['Incremental Load (GJ/d)'])
+                writer.writerow([])
+                
+                # Same header
+                writer.writerow(header)
+                
+                # Calculate incremental loads (current_year - previous_year)
+                for i, year in enumerate(all_years):
+                    if i == 0:
+                        # First year: no previous year, show zeros or skip
+                        row = [str(year)]
+                        for area in all_areas:
+                            row.append("0.00")
+                        row.append("0.00")
+                        writer.writerow(row)
+                    else:
+                        prev_year = all_years[i-1]
+                        row = [str(year)]
+                        
+                        # Calculate increment for each area
+                        row_total = 0.0
+                        for area in all_areas:
+                            current_load = total_loads[year].get(area, 0.0)
+                            previous_load = total_loads[prev_year].get(area, 0.0)
+                            increment = current_load - previous_load
+                            row.append(f"{increment:.2f}")
+                            row_total += increment
+                        
+                        # Add TOTAL column
+                        row.append(f"{row_total:.2f}")
+                        writer.writerow(row)
+            
+            # Show success message
+            QMessageBox.information(
+                self.iface.mainWindow(),
+                "Export Successful",
+                f"Summary forecast exported successfully to:\n{file_path}\n\n"
+                f"Exported data for {len(all_areas)} areas and {len(all_years)} years.\n"
+                f"Includes absolute loads and incremental loads tables."
+            )
+            
+            LOGGER.info(f"Summary forecast exported to {file_path}")
+            
+        except Exception as e:
+            LOGGER.error(f"Error exporting summary forecast to CSV: {e}")
+            import traceback
+            LOGGER.error(f"Full traceback: {traceback.format_exc()}")
+            
+            if self.iface:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self.iface.mainWindow(),
+                    "Export Error",
+                    f"Error exporting summary forecast:\n{str(e)}"
+                )
+    
+    def export_forecast_for_reforecaster(self, forecast_results):
+        """
+        Export forecast results in simple format for the Reforecaster tool.
+        
+        Format: Area, Year, Load
+        Where Load is the total load (residential + commercial + industrial) for that area and year.
+        
+        This format is required by the pipe_to_node_converter's reforecast mode.
+        
+        Args:
+            forecast_results: Dictionary containing forecast data
+                             Format: {load_class: {year: {area: load_value}}}
+        """
+        try:
+            from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+            import csv
+            from datetime import datetime
+            
+            # Prompt for save location
+            default_filename = f"reforecast_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            file_path, _ = QFileDialog.getSaveFileName(
+                self.iface.mainWindow(),
+                "Export for Reforecaster",
+                default_filename,
+                "CSV Files (*.csv)"
+            )
+            
+            if not file_path:
+                return  # User cancelled
+            
+            # Extract all unique years and areas
+            all_years = set()
+            all_areas = set()
+            
+            for load_class in ['residential', 'commercial', 'industrial']:
+                if load_class in forecast_results:
+                    for year, areas_dict in forecast_results[load_class].items():
+                        all_years.add(year)
+                        all_areas.update(areas_dict.keys())
+            
+            all_years = sorted(list(all_years))
+            all_areas = sorted(list(all_areas))
+            
+            if not all_years or not all_areas:
+                QMessageBox.warning(
+                    self.iface.mainWindow(),
+                    "No Data",
+                    "No forecast data available to export."
+                )
+                return
+            
+            # Convert calendar years to period years for reforecaster
+            # Reforecaster expects "Year" to be periods (5, 10, 15...) not calendar years (2025, 2026...)
+            start_year = min(all_years)
+            
+            # Calculate total loads per area per year (sum all load classes)
+            # Structure: {(area, period_year): total_load}
+            total_loads = {}
+            period_years = set()
+            
+            for year in all_years:
+                period_year = year - start_year  # Convert to period (0, 1, 2, 3...)
+                period_years.add(period_year)
+                
+                for area in all_areas:
+                    area_total = 0.0
+                    
+                    # Sum residential, commercial, industrial for this area/year
+                    for load_class in ['residential', 'commercial', 'industrial']:
+                        if load_class in forecast_results and year in forecast_results[load_class]:
+                            area_total += forecast_results[load_class][year].get(area, 0.0)
+                    
+                    total_loads[(area, period_year)] = area_total
+            
+            period_years = sorted(list(period_years))
+            
+            # Write CSV file in simple format with period years
+            with open(file_path, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Header row
+                writer.writerow(['Area', 'Year', 'Load'])
+                
+                # Data rows: one per area-period combination
+                for area in all_areas:
+                    for period_year in period_years:
+                        load = total_loads.get((area, period_year), 0.0)
+                        writer.writerow([area, period_year, f"{load:.2f}"])
+            
+            # Show success message
+            QMessageBox.information(
+                self.iface.mainWindow(),
+                "Export Successful",
+                f"Reforecast data exported successfully to:\n{file_path}\n\n"
+                f"Format: Area, Year (period), Load\n"
+                f"Calendar years {min(all_years)}-{max(all_years)} converted to periods {min(period_years)}-{max(period_years)}\n"
+                f"Exported {len(all_areas)} areas × {len(period_years)} periods = {len(all_areas) * len(period_years)} rows\n\n"
+                f"This file can be used with the Pipe-to-Node Converter's Reforecast mode."
+            )
+            
+            LOGGER.info(f"Reforecast data exported to {file_path}")
+            LOGGER.info(f"  Areas: {all_areas}")
+            LOGGER.info(f"  Years: {all_years}")
+            
+        except Exception as e:
+            LOGGER.error(f"Error exporting reforecast data to CSV: {e}")
+            import traceback
+            LOGGER.error(f"Full traceback: {traceback.format_exc()}")
+            
+            if self.iface:
+                from qgis.PyQt.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self.iface.mainWindow(),
+                    "Export Error",
+                    f"Error exporting reforecast data:\n{str(e)}"
                 )

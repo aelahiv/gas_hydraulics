@@ -305,11 +305,34 @@ class LoadAssignmentTool:
                     "Could not parse forecast CSV file or no data found."
                 )
                 return
+
+            # Determine whether CSV values are cumulative totals or per-period increments
+            detected_cumulative = self._detect_cumulative_totals(forecast_data)
+            interpretation_note = None
+            if detected_cumulative:
+                LOGGER.info("Forecast CSV appears to contain cumulative totals by year; converting to per-period increments for assignment")
+                forecast_data_increments = self._compute_increments_from_cumulative(forecast_data)
+                interpretation_note = "Detected: CSV contains cumulative totals → converted to per-period increments for assignment."
+            else:
+                LOGGER.info("Forecast CSV appears to contain per-period increments; using values as-is")
+                forecast_data_increments = forecast_data
+                interpretation_note = "Detected: CSV contains per-period increments → using values as-is."
+
+            # Build normalization map for area names from CSV (to match polygon names robustly)
+            csv_area_map = self._build_csv_area_normalization_map(forecast_data_increments)
+
+            # Detect if CSV years are calendar years (e.g., 2025) or period offsets (e.g., 5,10,15)
+            csv_year_mode = self._detect_csv_year_mode(forecast_data_increments)
+            if csv_year_mode == 'calendar':
+                interpretation_note += " Years: detected as calendar years."
+            else:
+                interpretation_note += " Years: detected as period offsets from start year."
             
             # Get polygon name field (case-insensitive)
             polygon_fields = {field.name().upper(): field.name() for field in polygon_layer.fields()}
             name_field = None
-            for field_name in ['NAME', 'AREA', 'ID']:
+            # Prefer semantic name fields; try ID last
+            for field_name in ['NAME', 'AREA', 'SUBZONE', 'ZONE', 'NBHD', 'NEIGHBORHOOD', 'ID']:
                 if field_name in polygon_fields:
                     name_field = polygon_fields[field_name]
                     break
@@ -331,10 +354,11 @@ class LoadAssignmentTool:
             preview_result = self.show_data_preview(
                 pipe_layer, 
                 polygon_layer, 
-                forecast_data, 
+                forecast_data_increments, 
                 year_field, 
                 name_field,
-                start_year
+                start_year,
+                interpretation_note
             )
             
             if not preview_result:
@@ -347,9 +371,11 @@ class LoadAssignmentTool:
             success, message = self.assign_loads_to_pipes(
                 pipe_layer, 
                 polygon_layer, 
-                forecast_data, 
+                forecast_data_increments, 
                 start_year, 
-                name_field
+                name_field,
+                csv_area_map=csv_area_map,
+                csv_year_mode=csv_year_mode
             )
             
             if success:
@@ -376,7 +402,7 @@ class LoadAssignmentTool:
                 f"Error during load assignment:\n{str(e)}"
             )
     
-    def show_data_preview(self, pipe_layer, polygon_layer, forecast_data, year_field, name_field, start_year):
+    def show_data_preview(self, pipe_layer, polygon_layer, forecast_data, year_field, name_field, start_year, interpretation_note=None):
         """Show a preview of the data to be processed with validation.
         
         Args:
@@ -386,6 +412,7 @@ class LoadAssignmentTool:
             year_field: Name of year field in pipe layer
             name_field: Name of name field in polygon layer
             start_year: Base year for calculations
+            interpretation_note: Optional string describing how CSV values are interpreted
             
         Returns:
             bool: True if user confirms, False if cancelled
@@ -488,6 +515,8 @@ class LoadAssignmentTool:
         summary.append(f"  • Year range: {min(csv_years) if csv_years else 'N/A'} - {max(csv_years) if csv_years else 'N/A'}")
         summary.append(f"  • Unique years: {len(csv_years)}")
         summary.append(f"  • Start year: {start_year}")
+        if interpretation_note:
+            summary.append(f"  • Interpretation: {interpretation_note}")
         summary.append("")
         
         summary.append("="*80)
@@ -590,7 +619,12 @@ class LoadAssignmentTool:
                 forecast_table.setItem(i, j + 1, QTableWidgetItem(f"{load:.2f}"))
         
         forecast_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        forecast_layout.addWidget(QLabel(f"Forecast Loads from CSV ({len(sorted_areas)} areas, {len(sorted_years)} years)"))
+        header_text = f"Forecast Loads ({len(sorted_areas)} areas, {len(sorted_years)} years)"
+        forecast_layout.addWidget(QLabel(header_text))
+        if interpretation_note:
+            interp_lbl = QLabel(interpretation_note)
+            interp_lbl.setStyleSheet("color: #555; font-style: italic; padding-bottom: 6px;")
+            forecast_layout.addWidget(interp_lbl)
         forecast_layout.addWidget(forecast_table)
         forecast_widget.setLayout(forecast_layout)
         tabs.addTab(forecast_widget, " Forecast Data")
@@ -661,14 +695,23 @@ class LoadAssignmentTool:
         GeoPandas preserves datetime objects correctly (Format 11/12 from testing),
         whereas QGIS's export converts them in ways that break Synergi compatibility.
         
+        Falls back to instructions if GeoPandas is not available.
+        
         Args:
             qgis_layer: QGIS vector layer with YEAR field
             
         Returns:
-            str: Path to exported Synergi-compatible shapefile
+            str: Path to exported Synergi-compatible shapefile, or None if GeoPandas unavailable
         """
-        import geopandas as gpd
-        import pandas as pd
+        # Try to import GeoPandas - may not be available in all QGIS installs
+        try:
+            import geopandas as gpd
+            import pandas as pd
+        except ImportError as e:
+            LOGGER.warning(f"GeoPandas not available: {e}")
+            LOGGER.warning("Synergi-compatible export requires GeoPandas. Please install it or use manual fix tool.")
+            return None
+        
         from datetime import datetime
         import tempfile
         import os
@@ -708,13 +751,13 @@ class LoadAssignmentTool:
             year_col = 'YEAR' if 'YEAR' in gdf.columns else 'Year'
             
             def year_to_excel_serial_string(year_str):
-                """Convert year to Excel serial date STRING for November 11th."""
+                """Convert year to Excel serial date STRING for November 1st."""
                 if pd.isna(year_str) or not str(year_str).strip():
                     return ""
                 try:
                     year = int(year_str)
-                    # November 11th
-                    target_date = pd.Timestamp(year, 11, 11)
+                    # November 1st
+                    target_date = pd.Timestamp(year, 11, 1)
                     # Excel epoch (serial 1 = 1900-01-01, but use 1899-12-30 due to Excel bug)
                     epoch = pd.Timestamp(1899, 12, 30)
                     serial = (target_date - epoch).days
@@ -748,7 +791,7 @@ class LoadAssignmentTool:
         
         return output_path
     
-    def assign_loads_to_pipes(self, pipe_layer, polygon_layer, forecast_data, start_year, name_field):
+    def assign_loads_to_pipes(self, pipe_layer, polygon_layer, forecast_data, start_year, name_field, csv_area_map=None, csv_year_mode=None, aggregation_window_years=5):
         """Assign loads to pipes based on spatial intersection and forecast data.
         
         Args:
@@ -757,6 +800,8 @@ class LoadAssignmentTool:
             forecast_data: Dictionary of {area: {year: load}}
             start_year: Base year for period calculation
             name_field: Field name in polygon layer containing area names
+            csv_area_map: Dict mapping normalized polygon names -> CSV area keys
+            csv_year_mode: 'calendar' or 'period' to interpret CSV year keys
             
         Returns:
             tuple: (success: bool, message: str)
@@ -798,43 +843,76 @@ class LoadAssignmentTool:
             
             # Create spatial index for polygons
             LOGGER.info("Creating spatial index for polygons...")
-            spatial_index = QgsSpatialIndex(polygon_layer.getFeatures())
-            
-            # Group pipes by polygon intersection and year
-            LOGGER.info("Grouping pipes by polygon intersection and year...")
-            pipe_groups = defaultdict(lambda: defaultdict(list))
-            pipe_polygon_map = {}  # Map pipe ID to polygon name
-            
+            polygon_spatial_index = QgsSpatialIndex(polygon_layer.getFeatures())
+
+            # Helper: assign each pipe to the single polygon with maximum overlap (prevents double counting)
+            LOGGER.info("Building pipe-to-polygon mapping (maximum overlap)...")
+            pipe_polygon_map = {}  # pipe id -> polygon name (as in polygon layer)
+            pipe_csv_area_map = {}  # pipe id -> CSV area key (normalized match)
             for pipe in pipe_layer.getFeatures():
                 pipe_geom = pipe.geometry()
-                pipe_year_raw = pipe[year_field]
-                
-                # Safely convert year to integer (handles strings like "2020")
-                pipe_year = safe_int(pipe_year_raw)
-                
-                if pipe_year is None:
-                    LOGGER.warning(f"Pipe {pipe.id()} has invalid year value: '{pipe_year_raw}', skipping")
+                if pipe_geom is None or pipe_geom.isEmpty():
                     continue
-                
-                # Find intersecting polygons
-                intersecting_ids = spatial_index.intersects(pipe_geom.boundingBox())
-                
-                for poly_id in intersecting_ids:
+
+                # Candidate polygons by bbox
+                candidate_ids = polygon_spatial_index.intersects(pipe_geom.boundingBox())
+
+                max_overlap = 0.0
+                best_polygon_name = None
+
+                for poly_id in candidate_ids:
                     polygon = polygon_layer.getFeature(poly_id)
                     poly_geom = polygon.geometry()
-                    
-                    if pipe_geom.intersects(poly_geom):
+                    if poly_geom is None or poly_geom.isEmpty():
+                        continue
+
+                    if not pipe_geom.intersects(poly_geom):
+                        continue
+
+                    try:
+                        intersection = poly_geom.intersection(pipe_geom)
+                        overlap = intersection.length() if (intersection and not intersection.isEmpty()) else 0.0
+                    except Exception:
+                        # If intersection fails, treat as minimal overlap
+                        overlap = 0.0
+
+                    if overlap > max_overlap:
+                        max_overlap = overlap
                         poly_name_raw = polygon[name_field]
-                        # Safely convert to string (handles None, numbers, etc.)
-                        poly_name = safe_str(poly_name_raw).strip()
-                        
-                        if not poly_name:
-                            LOGGER.warning(f"Polygon {poly_id} has empty name, skipping")
-                            continue
-                        
-                        pipe_groups[poly_name][pipe_year].append(pipe.id())
-                        pipe_polygon_map[pipe.id()] = poly_name
-                        break  # Use first intersecting polygon
+                        best_polygon_name = safe_str(poly_name_raw).strip()
+
+                if best_polygon_name:
+                    pipe_id = pipe.id()
+                    pipe_polygon_map[pipe_id] = best_polygon_name
+                    if csv_area_map is not None:
+                        norm = self._normalize_area_name(best_polygon_name)
+                        csv_key = csv_area_map.get(norm)
+                        if csv_key:
+                            pipe_csv_area_map[pipe_id] = csv_key
+
+            LOGGER.info(f"Pipe-to-polygon assignment complete. Assigned {len(pipe_polygon_map)} pipes to polygons by max overlap.")
+
+            # Group pipes by assigned polygon and year
+            LOGGER.info("Grouping pipes by assigned polygon and year...")
+            pipe_groups = defaultdict(lambda: defaultdict(list))  # key: csv_area_key (or polygon name) -> year_key -> [pipe_ids]
+            for pipe in pipe_layer.getFeatures():
+                pipe_id = pipe.id()
+                if pipe_id not in pipe_polygon_map:
+                    continue
+                pipe_year_raw = pipe[year_field]
+                pipe_year = safe_int(pipe_year_raw)
+                if pipe_year is None:
+                    LOGGER.warning(f"Pipe {pipe_id} has invalid year value: '{pipe_year_raw}', skipping")
+                    continue
+                # Choose the grouping area key: use mapped CSV key if available, else polygon name
+                if pipe_id in pipe_csv_area_map:
+                    area_key = pipe_csv_area_map[pipe_id]
+                else:
+                    area_key = pipe_polygon_map[pipe_id]
+                if not area_key:
+                    continue
+                # Group by the raw pipe calendar year (we'll decide lookup later)
+                pipe_groups[area_key][pipe_year].append(pipe_id)
             
             LOGGER.info(f"Found {len(pipe_groups)} polygon groups")
             
@@ -850,33 +928,115 @@ class LoadAssignmentTool:
                 'SYN_DATE': pipe_layer.fields().indexFromName(syn_date_field)
             }
             
-            for poly_name, year_pipes in pipe_groups.items():
+            # First, initialize ALL pipes with default values (prevents NULLs)
+            LOGGER.info("Initializing all pipes with default values...")
+            for pipe in pipe_layer.getFeatures():
+                pipe_id = pipe.id()
+                pipe_year_raw = pipe[year_field]
+                pipe_year = safe_int(pipe_year_raw)
+                
+                # Get polygon name for this pipe
+                polygon_name = pipe_polygon_map.get(pipe_id, "Unknown Area")
+                
+                # Set defaults for all pipes
+                if pipe_year:
+                    year_str = str(pipe_year)
+                    datetime_str = f"1-Nov-{pipe_year}"
+                    syn_date_int = (pipe_year * 10000) + 1101
+                    desc = f"{polygon_name} - No Load"
+                else:
+                    # No valid year - use empty/zero defaults
+                    year_str = ""
+                    datetime_str = ""
+                    syn_date_int = 0
+                    desc = f"{polygon_name} - No Load (No Year)"
+                
+                # Initialize with zeros/empty values but proper polygon and Prop
+                pipe_layer.changeAttributeValue(pipe_id, field_indices['DESC'], desc)
+                pipe_layer.changeAttributeValue(pipe_id, field_indices['LOAD'], 0.0)
+                pipe_layer.changeAttributeValue(pipe_id, field_indices['PROP'], "Proposed")
+                pipe_layer.changeAttributeValue(pipe_id, field_indices['YEAR'], year_str)
+                pipe_layer.changeAttributeValue(pipe_id, field_indices['DATETIME'], datetime_str)
+                pipe_layer.changeAttributeValue(pipe_id, field_indices['SYN_DATE'], syn_date_int)
+            
+            # Now update pipes that have forecast loads
+            LOGGER.info("Assigning forecast loads to pipes by max-overlap polygon groups...")
+            for area_key, year_pipes in pipe_groups.items():
                 for pipe_year, pipe_ids in year_pipes.items():
-                    # Calculate period (how many years from start)
-                    # Both pipe_year and start_year should be int, but ensure they are
-                    period_years = safe_int(pipe_year, 0) - safe_int(start_year, 0)
+                    # Calculate period offset (pipe calendar year minus start)
+                    py = safe_int(pipe_year, None)
+                    sy = safe_int(start_year, None)
+                    period_years = py - sy if (py is not None and sy is not None) else None
                     
-                    # Get load for this polygon and period
-                    load_raw = forecast_data.get(poly_name, {}).get(pipe_year, 0.0)
-                    load = safe_float(load_raw, 0.0)
+                    # Compute aggregated load for this area and pipe year.
+                    # For 5-year grouped pipes, sum the increments from N years ending AT pipe_year:
+                    # e.g., for pipe_year=2030, start_year=2025, window=5 → sum increments for 2026,2027,2028,2029,2030
+                    area_dict = forecast_data.get(area_key, {})
+                    load = 0.0
+                    if csv_year_mode == 'calendar':
+                        if py is not None and sy is not None and aggregation_window_years and aggregation_window_years > 1:
+                            # Compute first year of the window relative to start_year
+                            # For 2030 pipe with 2025 start and 5-year window: sum 2026..2030
+                            # Skip baseline year (start_year) by starting at start_year+1
+                            window_start = sy + ((py - sy) // aggregation_window_years - 1) * aggregation_window_years + 1
+                            window_start = max(window_start, sy + 1)  # Never include baseline year
+                            window_end = py  # Include the pipe year itself
+                            for y in range(window_start, window_end + 1):
+                                load += safe_float(area_dict.get(y, 0.0), 0.0)
+                        else:
+                            load = safe_float(area_dict.get(py, 0.0), 0.0)
+                    elif csv_year_mode == 'period':
+                        if period_years is not None and aggregation_window_years and aggregation_window_years > 1:
+                            # For period mode, sum increments for the N periods ending at period_years (inclusive)
+                            # Skip period 0 (baseline)
+                            window_start = max(1, ((period_years // aggregation_window_years) - 1) * aggregation_window_years + 1)
+                            window_end = period_years
+                            for p in range(window_start, window_end + 1):
+                                load += safe_float(area_dict.get(p, 0.0), 0.0)
+                        elif period_years is not None:
+                            load = safe_float(area_dict.get(period_years, 0.0), 0.0)
+                        else:
+                            load = 0.0
+                    else:
+                        # Unknown: try calendar window first
+                        if py is not None and sy is not None and aggregation_window_years and aggregation_window_years > 1:
+                            window_start = sy + ((py - sy) // aggregation_window_years - 1) * aggregation_window_years + 1
+                            window_start = max(window_start, sy + 1)
+                            window_end = py
+                            for y in range(window_start, window_end + 1):
+                                load += safe_float(area_dict.get(y, 0.0), 0.0)
+                        elif py is not None:
+                            load = safe_float(area_dict.get(py, 0.0), 0.0)
                     
                     if load > 0 and len(pipe_ids) > 0:
                         # Divide load equally among pipes
                         load_per_pipe = load / len(pipe_ids)
                         
                         # Generate description
-                        desc = f"{poly_name} - {period_years} Year Load"
+                        # Prefer the original polygon display name when available
+                        display_name = None
+                        # Find one pipe's polygon name for display
+                        for pid in pipe_ids:
+                            if pid in pipe_polygon_map:
+                                display_name = pipe_polygon_map[pid]
+                                break
+                        if not display_name:
+                            display_name = area_key
+                        if period_years is not None:
+                            desc = f"{display_name} - {period_years} Year Load"
+                        else:
+                            desc = f"{display_name} - Load"
                         
                         # Generate human-readable year string
                         year_str = str(pipe_year)
                         
                         # Create two date representations:
-                        # 1. DATETIME: Human-readable string for QGIS display (11-Nov-2025)
-                        datetime_str = f"11-Nov-{pipe_year}"
+                        # 1. DATETIME: Human-readable string for QGIS display (1-Nov-2025)
+                        datetime_str = f"1-Nov-{pipe_year}"
                         
                         # 2. SYN_DATE: Integer in YYYYMMDD format for Synergi
                         #    QGIS won't convert integers, so Synergi will receive raw value
-                        syn_date_int = (pipe_year * 10000) + 1111  # November 11th = YYYYMMDD format
+                        syn_date_int = (pipe_year * 10000) + 1101  # November 1st = YYYYMMDD format
                         
                         # Update each pipe
                         for pipe_id in pipe_ids:
@@ -893,13 +1053,36 @@ class LoadAssignmentTool:
             # Refresh layer
             pipe_layer.triggerRepaint()
             
-            # Export Synergi-compatible shapefile using GeoPandas
+            # Export Synergi-compatible shapefile using GeoPandas (if available)
             synergi_export_msg = ""
             try:
                 synergi_path = self._export_synergi_shapefile(pipe_layer)
-                synergi_export_msg = f"\n\n✓ Synergi-ready shapefile exported:\n  {synergi_path}\n  (Use this file for Synergi import, not the QGIS layer)"
+                if synergi_path:
+                    synergi_export_msg = f"\n\n✓ Synergi-ready shapefile exported:\n  {synergi_path}\n  (Use this file for Synergi import, not the QGIS layer)"
+                else:
+                    # GeoPandas not available
+                    layer_source = pipe_layer.source()
+                    if layer_source and layer_source.endswith('.shp'):
+                        input_path = layer_source
+                    else:
+                        input_path = "your_layer.shp"
+                    
+                    synergi_export_msg = (
+                        f"\n\n⚠ GeoPandas not available in this QGIS installation.\n"
+                        f"  Load assignment completed in QGIS layer.\n\n"
+                        f"  To create Synergi-compatible shapefile:\n"
+                        f"  1. Save layer: Right-click layer → Export → Save Features As\n"
+                        f"  2. Run manual fix tool:\n"
+                        f"     python fix_datetime_for_synergi.py {input_path} output_synergi.shp\n\n"
+                        f"  Or install GeoPandas:\n"
+                        f"  1. Open OSGeo4W Shell (from QGIS install folder)\n"
+                        f"  2. Run: pip install geopandas\n"
+                        f"  3. Restart QGIS"
+                    )
             except Exception as e:
                 LOGGER.warning(f"Could not export Synergi shapefile: {e}")
+                import traceback
+                LOGGER.warning(f"Traceback: {traceback.format_exc()}")
                 synergi_export_msg = f"\n\n⚠ Could not auto-export Synergi file: {e}\n  You can manually export using: python fix_datetime_for_synergi.py"
             
             message = (
@@ -910,7 +1093,7 @@ class LoadAssignmentTool:
                 f"  LOAD = Load value (GJ/d)\n"
                 f"  PROP = Status ('Proposed')\n"
                 f"  YEAR = Human-readable year (e.g., '2025')\n"
-                f"  DATETIME = Human-readable date (11-Nov-YYYY)\n"
+                f"  DATETIME = Human-readable date (1-Nov-YYYY)\n"
                 f"  SYN_DATE = Integer date for Synergi (YYYYMMDD)\n"
                 f"{synergi_export_msg}"
             )
@@ -928,6 +1111,121 @@ class LoadAssignmentTool:
             
             return False, f"Error during load assignment:\n{str(e)}"
     
+    def _detect_cumulative_totals(self, forecast_data):
+        """Heuristically detect if forecast values are cumulative totals.
+
+        Treat values as cumulative if they are non-decreasing across years
+        for most areas. If there's only one year per area, default to True
+        (safe: increments = cumulative in that case).
+
+        Args:
+            forecast_data (dict): {area: {year: value}}
+
+        Returns:
+            bool: True if values appear cumulative, False if incremental.
+        """
+        try:
+            total_pairs = 0
+            decreases = 0
+            for area, year_map in forecast_data.items():
+                if not year_map:
+                    continue
+                years = sorted(year_map.keys())
+                if len(years) < 2:
+                    continue
+                for i in range(1, len(years)):
+                    total_pairs += 1
+                    prev_v = safe_float(year_map.get(years[i-1]), 0.0)
+                    cur_v = safe_float(year_map.get(years[i]), 0.0)
+                    if cur_v < prev_v - 1e-9:  # allow tiny numerical jitter
+                        decreases += 1
+            if total_pairs == 0:
+                # Not enough info; default to cumulative (safer)
+                return True
+            ratio = decreases / float(total_pairs)
+            LOGGER.info(f"Cumulative detection: decreases={decreases}, comparisons={total_pairs}, ratio={ratio:.3f}")
+            return ratio <= 0.2
+        except Exception as e:
+            LOGGER.warning(f"Detection of cumulative totals failed ({e}); defaulting to cumulative interpretation")
+            return True
+
+    def _compute_increments_from_cumulative(self, forecast_data):
+        """Convert cumulative totals by year to per-period increments.
+
+        For each area, increments[year] = max(cum[year] - cum[prev_year], 0).
+        The first year is treated as baseline (existing load) with increment=0.
+
+        Args:
+            forecast_data (dict): {area: {year: cumulative_total}}
+
+        Returns:
+            dict: {area: {year: increment}}
+        """
+        increments = {}
+        for area, year_map in forecast_data.items():
+            if not year_map:
+                continue
+            years = sorted(year_map.keys())
+            if not years:
+                continue
+            # First year is baseline - increment is 0
+            prev_cum = safe_float(year_map.get(years[0]), 0.0)
+            area_inc = {}
+            area_inc[years[0]] = 0.0  # Baseline year has no "added" load
+            for i in range(1, len(years)):
+                y = years[i]
+                cur_cum = safe_float(year_map.get(y), 0.0)
+                inc = cur_cum - prev_cum
+                if inc < 0:
+                    LOGGER.warning(f"Area '{area}' cumulative total decreased at {y} (prev={prev_cum}, cur={cur_cum}); clamping increment to 0")
+                    inc = 0.0
+                area_inc[y] = inc
+                prev_cum = cur_cum
+            increments[area] = area_inc
+        return increments
+
+    def _normalize_area_name(self, name):
+        """Normalize area names for robust matching.
+
+        - Lowercase
+        - Remove parenthetical content
+        - Replace non-alphanumeric with single spaces
+        - Collapse whitespace
+        """
+        import re
+        s = safe_str(name, "").lower()
+        # remove parenthetical content (e.g., "NBHD 1A (Quarry Ridge)" -> "NBHD 1A")
+        s = re.sub(r"\(.*?\)", "", s)
+        # replace non-alphanumeric with space
+        s = re.sub(r"[^a-z0-9]+", " ", s)
+        # collapse spaces
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def _build_csv_area_normalization_map(self, forecast_data):
+        """Build map from normalized name -> original CSV area key."""
+        mapping = {}
+        for area in forecast_data.keys():
+            norm = self._normalize_area_name(area)
+            if norm:
+                mapping[norm] = area
+        return mapping
+
+    def _detect_csv_year_mode(self, forecast_data):
+        """Detect if year keys look like calendar years or period offsets.
+
+        Returns 'calendar' if most keys are in [1900, 2100], else 'period'.
+        """
+        years = []
+        for d in forecast_data.values():
+            years.extend(list(d.keys()))
+        if not years:
+            return 'calendar'
+        cal_like = sum(1 for y in years if isinstance(y, int) and 1900 <= y <= 2100)
+        ratio = cal_like / float(len(years))
+        LOGGER.info(f"CSV year mode detection: calendar-like={cal_like}/{len(years)} ({ratio:.2f})")
+        return 'calendar' if ratio >= 0.5 else 'period'
+
     def parse_csv(self, csv_path):
         """Parse forecast CSV and extract loads by area and year.
         
